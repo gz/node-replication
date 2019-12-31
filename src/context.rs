@@ -27,7 +27,7 @@ const MAX_PENDING_OPS: usize = 32;
 #[derive(Default)]
 pub struct Context<T, R>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone + Default,
     R: Sized + Copy + Default,
 {
     /// Array that will hold all pending operations to be appended to the shared log as
@@ -51,7 +51,7 @@ where
 
 impl<T, R> Context<T, R>
 where
-    T: Sized + Copy + Default,
+    T: Sized + Clone + Default,
     R: Sized + Copy + Default,
 {
     /// Enqueues an operation onto this context's batch of pending operations.
@@ -95,7 +95,7 @@ where
         // the slice above doesn't cause us to cross the tail of the batch.
         for i in 0..n {
             let e = self.batch[self.index(h + i)].as_ptr();
-            unsafe { (*e).1 = responses[i] };
+            unsafe { (*e).1 = responses[i].clone() };
         }
 
         self.comb.set(h + n);
@@ -125,7 +125,9 @@ where
                 break;
             };
 
-            buffer.push(self.batch[self.index(h)].get().0);
+            unsafe {
+                buffer.push((*self.batch[self.index(h)].as_ptr()).0.clone());
+            }
             h += 1;
             n += 1;
         }
@@ -155,7 +157,9 @@ where
                 break;
             };
 
-            buffer.push(self.batch[self.index(s)].get().1);
+            unsafe {
+                buffer.push((*self.batch[self.index(s)].as_ptr()).1.clone());
+            }
             s += 1;
         }
 
@@ -194,10 +198,10 @@ mod test {
     fn test_context_enqueue() {
         let c = Context::<u64, u64>::default();
         assert!(c.enqueue(121));
-        assert_eq!(c.batch[0].get().0, 121);
-        assert_eq!(c.tail.get(), 1);
-        assert_eq!(c.head.get(), 0);
-        assert_eq!(c.comb.get(), 0);
+        assert_eq!(c.batch[0].take().0, 121);
+        assert_eq!(c.tail.take(), 1);
+        assert_eq!(c.head.take(), 0);
+        assert_eq!(c.comb.take(), 0);
     }
 
     // Tests that enqueues on the context fail when it's batch of operations is full.

@@ -148,7 +148,7 @@ where
     /// received on a different replica and appended to the shared log.
     pub fn execute(&self, op: <D as Dispatch>::Operation, idx: usize) {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        while !self.make_pending(op, idx) {}
+        while !self.make_pending(op.clone(), idx) {}
         self.try_combine(idx);
     }
 

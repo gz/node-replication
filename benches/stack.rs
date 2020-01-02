@@ -60,16 +60,17 @@ impl Default for Stack {
 impl Dispatch for Stack {
     type Operation = Op;
     type Response = Option<u32>;
+    type ResponseError = ();
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Self::Response {
+    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Push(v) => {
                 self.push(v);
-                return None;
+                return Ok(None);
             }
-            Op::Pop => return self.pop(),
-            Op::Invalid => unreachable!("Op::Invalid?"),
+            Op::Pop => return Ok(self.pop()),
+            Op::Invalid => return Err(()),
         }
     }
 }

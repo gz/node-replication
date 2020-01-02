@@ -25,6 +25,7 @@ use core::fmt::Debug;
 pub trait Dispatch {
     type Operation: Sized + Clone + Default + PartialEq + Debug;
     type Response: Sized + Copy + Default;
+    type ResponseError: Sized + Copy + Default;
 
-    fn dispatch(&mut self, op: Self::Operation) -> Self::Response;
+    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError>;
 }

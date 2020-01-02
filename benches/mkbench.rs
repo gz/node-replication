@@ -153,6 +153,7 @@ where
     <T as node_replication::Dispatch>::Operation: std::marker::Send,
     <T as node_replication::Dispatch>::Operation: std::marker::Sync,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
+    <T as node_replication::Dispatch>::ResponseError: std::marker::Send,
     T: 'static,
 {
     /// Create a new ScaleBenchmark.
@@ -490,6 +491,7 @@ where
     <T as node_replication::Dispatch>::Operation: std::marker::Send,
     <T as node_replication::Dispatch>::Operation: std::marker::Sync,
     <T as node_replication::Dispatch>::Response: std::marker::Send,
+    <T as node_replication::Dispatch>::ResponseError: std::marker::Send,
     T: 'static,
     T: std::marker::Send,
 {

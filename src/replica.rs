@@ -50,8 +50,11 @@ where
 
     /// Static array of thread contexts. Threads buffer operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
-    contexts:
-        [Context<<D as Dispatch>::Operation, <D as Dispatch>::Response>; MAX_THREADS_PER_REPLICA],
+    contexts: [Context<
+        <D as Dispatch>::Operation,
+        <D as Dispatch>::Response,
+        <D as Dispatch>::ResponseError,
+    >; MAX_THREADS_PER_REPLICA],
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
@@ -65,7 +68,7 @@ where
 
     /// A buffer of results collected after flat combining. With the help of `inflight`,
     /// the combiner enqueues these results into the appropriate thread context.
-    result: RefCell<Vec<<D as Dispatch>::Response>>,
+    result: RefCell<Vec<Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>>>,
 
     /// Reference to the shared log that operations will be appended to and the
     /// data structure will be updated from.
@@ -107,14 +110,20 @@ where
             contexts: arr![Default::default(); 128],
             buffer: RefCell::new(Vec::with_capacity(
                 MAX_THREADS_PER_REPLICA
-                    * Context::<<D as Dispatch>::Operation, <D as Dispatch>::Response>::batch_size(
-                    ),
+                    * Context::<
+                        <D as Dispatch>::Operation,
+                        <D as Dispatch>::Response,
+                        <D as Dispatch>::ResponseError,
+                    >::batch_size(),
             )),
             inflight: RefCell::new(arr![Default::default(); 128]),
             result: RefCell::new(Vec::with_capacity(
                 MAX_THREADS_PER_REPLICA
-                    * Context::<<D as Dispatch>::Operation, <D as Dispatch>::Response>::batch_size(
-                    ),
+                    * Context::<
+                        <D as Dispatch>::Operation,
+                        <D as Dispatch>::Response,
+                        <D as Dispatch>::ResponseError,
+                    >::batch_size(),
             )),
             slog: log.clone(),
             data: RefCell::new(D::default()),
@@ -197,8 +206,9 @@ where
         {}
 
         let mut data = self.data.borrow_mut();
-        let mut f = |o: <D as Dispatch>::Operation, _i: usize| {
-            data.dispatch(o);
+        let mut f = |o: <D as Dispatch>::Operation, _i: usize| match data.dispatch(o) {
+            Ok(_) => {}
+            Err(_) => error!("Error in operation dispatch"),
         };
 
         self.slog.exec(self.idx, &mut f);
@@ -330,10 +340,14 @@ mod test {
     impl Dispatch for Data {
         type Operation = u64;
         type Response = u64;
+        type ResponseError = ();
 
-        fn dispatch(&mut self, _op: Self::Operation) -> Self::Response {
+        fn dispatch(
+            &mut self,
+            _op: Self::Operation,
+        ) -> Result<Self::Response, Self::ResponseError> {
             self.junk += 1;
-            return 107;
+            return Ok(107);
         }
     }
 
@@ -348,12 +362,12 @@ mod test {
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.buffer.borrow().capacity(),
-            MAX_THREADS_PER_REPLICA * Context::<u64, u64>::batch_size()
+            MAX_THREADS_PER_REPLICA * Context::<u64, u64, ()>::batch_size()
         );
         assert_eq!(repl.inflight.borrow().len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.result.borrow().capacity(),
-            MAX_THREADS_PER_REPLICA * Context::<u64, u64>::batch_size()
+            MAX_THREADS_PER_REPLICA * Context::<u64, u64, ()>::batch_size()
         );
         assert_eq!(repl.data.borrow().junk, 0);
     }
@@ -398,7 +412,7 @@ mod test {
     fn test_replica_make_pending_false() {
         let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
-        for _i in 0..Context::<u64, u64>::batch_size() {
+        for _i in 0..Context::<u64, u64, ()>::batch_size() {
             assert!(repl.make_pending(121, 1))
         }
 

@@ -159,7 +159,9 @@ where
 
         // Initialize all log entries by calling the default constructor.
         for e in &mut raw[..] {
-            e.set(Entry::default());
+            unsafe {
+                ::std::ptr::write(e, Cell::new(Entry::default()));
+            }
         }
 
         let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = arr![Default::default(); 64];
@@ -463,6 +465,7 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use std::sync::Arc;
 
     // Define operations along with their arguments that go onto the log.
     #[derive(Clone)] // Traits required by the log interface.
@@ -731,5 +734,28 @@ mod tests {
 
         assert_eq!(l.lmasks[0].get(), false);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
+    }
+
+    #[test]
+    fn test_log_change_refcount() {
+        let l = Log::<Arc<Operation>>::default();
+        let o1 = [Arc::new(Operation::Read)];
+        let o2 = [Arc::new(Operation::Read)];
+        assert_eq!(Arc::strong_count(&o1[0]), 1);
+        assert_eq!(Arc::strong_count(&o2[0]), 1);
+
+        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0]), 2);
+        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0]), 3);
+
+        unsafe { l.reset() };
+
+        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0]), 2);
+        assert_eq!(Arc::strong_count(&o2[0]), 2);
+        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0]), 1);
+        assert_eq!(Arc::strong_count(&o2[0]), 3);
     }
 }

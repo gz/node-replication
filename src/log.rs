@@ -160,7 +160,7 @@ where
         // Initialize all log entries by calling the default constructor.
         for e in &mut raw[..] {
             unsafe {
-                ::std::ptr::write(e, Cell::new(Entry::default()));
+                ::core::ptr::write(e, Cell::new(Entry::default()));
             }
         }
 

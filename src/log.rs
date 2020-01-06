@@ -84,7 +84,7 @@ where
     size: usize,
 
     /// A reference to the actual log. Nothing but a slice of entries.
-    slog: &'a [Cell<Entry<T>>],
+    slog: &'a [Cell<Option<Entry<T>>>],
 
     /// Logical index into the above slice at which the log starts.
     head: CachePadded<AtomicUsize>,
@@ -141,7 +141,7 @@ where
 
         let mem = unsafe {
             alloc(
-                Layout::from_size_align(bytes, align_of::<Cell<Entry<T>>>())
+                Layout::from_size_align(bytes, align_of::<Cell<Option<Entry<T>>>>())
                     .expect("Alignment error while allocating the shared log!"),
             )
         };
@@ -155,12 +155,12 @@ where
         if !num.is_power_of_two() {
             panic!("Log size should be a power of two.")
         };
-        let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Entry<T>>, num) };
+        let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Option<Entry<T>>>, num) };
 
         // Initialize all log entries by calling the default constructor.
         for e in &mut raw[..] {
             unsafe {
-                ::core::ptr::write(e, Cell::new(Entry::default()));
+                ::core::ptr::write(e, Cell::new(None));
             }
         }
 
@@ -184,7 +184,7 @@ where
 
     /// Returns the size of an entry in bytes.
     fn entry_size() -> usize {
-        size_of::<Cell<Entry<T>>>()
+        size_of::<Cell<Option<Entry<T>>>>()
     }
 
     /// Registers a replica against the log. Returns an identifier that the replica
@@ -272,19 +272,31 @@ where
                 let e = self.slog[self.index(t + i)].as_ptr();
                 let mut m = self.lmasks[idx - 1].get();
 
-                // This entry was just reserved so it should be dead (!= m). However, if
-                // the log has wrapped around, then the alive mask has flipped. In this
-                // case, we flip the mask we were originally going to write into the
-                // allocated entry. We cannot flip lmasks[idx - 1] because this replica
-                // might still need to execute a few entries before the wrap around.
-                if unsafe { (*e).alivef == m } {
-                    m = !m;
-                }
+                match unsafe { (*e).as_mut() } {
+                    Some(e) => {
+                        // This entry was just reserved so it should be dead (!= m). However, if
+                        // the log has wrapped around, then the alive mask has flipped. In this
+                        // case, we flip the mask we were originally going to write into the
+                        // allocated entry. We cannot flip lmasks[idx - 1] because this replica
+                        // might still need to execute a few entries before the wrap around.
+                        if (*e).alivef == m {
+                            m = !m;
+                        }
 
-                unsafe { (*e).operation = ops[i].clone() };
-                unsafe { (*e).replica = idx };
-                compiler_fence(Ordering::AcqRel);
-                unsafe { (*e).alivef = m };
+                        (*e).operation = ops[i].clone();
+                        (*e).replica = idx;
+                        compiler_fence(Ordering::AcqRel);
+                        (*e).alivef = m;
+                    }
+
+                    None => unsafe {
+                        e.replace(Some(Entry {
+                            operation: ops[i].clone(),
+                            replica: idx,
+                            alivef: true,
+                        }));
+                    },
+                }
             }
 
             // If needed, advance the head of the log forward to make room on the log.
@@ -321,7 +333,7 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { (*e).alivef != self.lmasks[idx - 1].get() } {
+            while unsafe { !(*e).as_mut().is_some() } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
@@ -335,7 +347,9 @@ where
                 iteration += 1;
             }
 
-            unsafe { d((*e).operation.clone(), (*e).replica) };
+            if let Some(e) = unsafe { (*e).as_mut() } {
+                d((*e).operation.clone(), (*e).replica);
+            }
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
@@ -428,7 +442,7 @@ where
         // the reset of the log here.
         for i in 0..self.size {
             let e = self.slog[self.index(i)].as_ptr();
-            (*e).alivef = false;
+            *e = None;
         }
     }
 }
@@ -572,7 +586,7 @@ mod tests {
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
-        let slog = l.slog[0].take();
+        let slog = l.slog[0].take().unwrap();
         assert_eq!(slog.operation, Operation::Read);
         assert_eq!(slog.replica, 1);
     }
@@ -740,9 +754,7 @@ mod tests {
     fn test_log_change_refcount() {
         let l = Log::<Arc<Operation>>::default();
         let o1 = [Arc::new(Operation::Read)];
-        let o2 = [Arc::new(Operation::Read)];
         assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), 1);
 
         l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 2);
@@ -750,12 +762,6 @@ mod tests {
         assert_eq!(Arc::strong_count(&o1[0]), 3);
 
         unsafe { l.reset() };
-
-        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
-        assert_eq!(Arc::strong_count(&o1[0]), 2);
-        assert_eq!(Arc::strong_count(&o2[0]), 2);
-        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), 3);
     }
 }

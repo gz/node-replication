@@ -46,7 +46,7 @@ const WARN_THRESHOLD: usize = 1 << 28;
 #[repr(align(64))]
 struct Entry<T>
 where
-    T: Sized + Clone + Default,
+    T: Sized + Clone,
 {
     operation: T,
 
@@ -72,7 +72,7 @@ where
 #[repr(align(64))]
 pub struct Log<'a, T>
 where
-    T: Sized + Clone + Default,
+    T: Sized + Clone,
 {
     /// Raw pointer to the actual underlying log. Required for dealloc.
     rawp: *mut u8,
@@ -111,7 +111,7 @@ where
 
 impl<'a, T> fmt::Debug for Log<'a, T>
 where
-    T: Sized + Clone + Default,
+    T: Sized + Clone,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("Log")
@@ -123,15 +123,15 @@ where
 }
 
 /// The Log is Send. The *mut u8 (`rawp`) is never dereferenced.
-unsafe impl<'a, T> Send for Log<'a, T> where T: Sized + Clone + Default {}
+unsafe impl<'a, T> Send for Log<'a, T> where T: Sized + Clone {}
 
 /// The Log is Sync. We know this because: `head` and `tail` are atomic variables, `append()`
 /// reserves entries using a CAS, and exec() does not concurrently mutate entries on the log.
-unsafe impl<'a, T> Sync for Log<'a, T> where T: Sized + Clone + Default {}
+unsafe impl<'a, T> Sync for Log<'a, T> where T: Sized + Clone {}
 
 impl<'a, T> Log<'a, T>
 where
-    T: Sized + Clone + Default,
+    T: Sized + Clone,
 {
     /// Constructs and returns a log of size `bytes` bytes. This method also allocates
     /// memory for the log upfront. No further allocations will be performed once this
@@ -452,7 +452,7 @@ where
 
 impl<'a, T> Default for Log<'a, T>
 where
-    T: Sized + Clone + Default,
+    T: Sized + Clone,
 {
     /// Default constructor for the shared log.
     fn default() -> Self {
@@ -462,7 +462,7 @@ where
 
 impl<'a, T> Drop for Log<'a, T>
 where
-    T: Sized + Clone + Default,
+    T: Sized + Clone,
 {
     /// Destructor for the shared log.
     fn drop(&mut self) {

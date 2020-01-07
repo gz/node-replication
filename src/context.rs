@@ -24,16 +24,15 @@ const MAX_PENDING_OPS: usize = 32;
 /// `R` is a type parameter required by the struct. It is the type on the result obtained
 /// when an operation is executed against the replica.
 #[repr(align(64))]
-#[derive(Default)]
 pub struct Context<T, R, E>
 where
-    T: Sized + Clone + Default,
+    T: Sized + Clone,
     R: Sized + Copy + Default,
     E: Sized + Copy + Default,
 {
     /// Array that will hold all pending operations to be appended to the shared log as
     /// well as the results obtained on executing them against a replica.
-    batch: [CachePadded<Cell<(T, R, E)>>; MAX_PENDING_OPS],
+    batch: [CachePadded<Cell<(Option<T>, R, E)>>; MAX_PENDING_OPS],
 
     /// Logical array index at which new operations will be enqueued into the batch.
     /// This variable is updated by the thread that owns this context, and is read by the
@@ -50,9 +49,32 @@ where
     pub comb: CachePadded<Cell<usize>>,
 }
 
+impl<T, R, E> Default for Context<T, R, E>
+where
+    T: Sized + Clone,
+    R: Sized + Copy + Default,
+    E: Sized + Copy + Default,
+{
+    /// Default constructor for the context.
+    fn default() -> Context<T, R, E> {
+        let mut batch: [CachePadded<Cell<(Option<T>, R, E)>>; MAX_PENDING_OPS] =
+            unsafe { ::core::mem::MaybeUninit::zeroed().assume_init() };
+        for elem in &mut batch[..] {
+            *elem = CachePadded::new(Cell::new((None, Default::default(), Default::default())));
+        }
+
+        Context {
+            batch: batch,
+            tail: CachePadded::new(Cell::new(Default::default())),
+            head: CachePadded::new(Cell::new(Default::default())),
+            comb: CachePadded::new(Cell::new(Default::default())),
+        }
+    }
+}
+
 impl<T, R, E> Context<T, R, E>
 where
-    T: Sized + Clone + Default,
+    T: Sized + Clone,
     R: Sized + Copy + Default,
     E: Sized + Copy + Default,
 {
@@ -74,7 +96,7 @@ where
         // combiner sees this operation. Relying on TSO here to make sure that the tail
         // is updated only after the operation has been written in.
         let e = self.batch[self.index(t)].as_ptr();
-        unsafe { (*e).0 = op };
+        unsafe { (*e).0 = Some(op) };
 
         self.tail.set(t + 1);
         true
@@ -133,7 +155,14 @@ where
             };
 
             unsafe {
-                buffer.push((*self.batch[self.index(h)].as_ptr()).0.clone());
+                // enqueue() will always execute before ops(), so its safe to unwarp the Op.
+                buffer.push(
+                    (*self.batch[self.index(h)].as_ptr())
+                        .0
+                        .as_ref()
+                        .unwrap()
+                        .clone(),
+                );
             }
             h += 1;
             n += 1;
@@ -205,7 +234,7 @@ mod test {
     fn test_context_enqueue() {
         let c = Context::<u64, u64, ()>::default();
         assert!(c.enqueue(121));
-        assert_eq!(c.batch[0].take().0, 121);
+        assert_eq!(c.batch[0].take().0, Some(121));
         assert_eq!(c.tail.take(), 1);
         assert_eq!(c.head.take(), 0);
         assert_eq!(c.comb.take(), 0);

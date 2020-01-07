@@ -25,8 +25,6 @@ pub enum Op {
     WriteOnly(usize, usize, usize),
     /// Read some memory, then write some.
     ReadWrite(usize, usize, usize),
-    /// Invalid operation.
-    Invalid,
 }
 
 impl Op {
@@ -38,12 +36,6 @@ impl Op {
             Op::ReadWrite(ref mut a, _b, _c) => *a = tid,
             _ => (),
         };
-    }
-}
-
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
     }
 }
 
@@ -176,7 +168,6 @@ impl Dispatch for AbstractDataStructure {
             Op::ReadOnly(a, b, c) => return Ok(self.read(a, b, c)),
             Op::WriteOnly(a, b, c) => return Ok(self.write(a, b, c)),
             Op::ReadWrite(a, b, c) => return Ok(self.read_write(a, b, c)),
-            Op::Invalid => return Err(()),
         }
     }
 }
@@ -204,22 +195,22 @@ pub fn generate_operations(
                 0 => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
                 1 => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
                 2 => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
-                _ => ops.push(Op::Invalid),
+                _ => unreachable!(),
             },
             (false, true, true) => match op % 2 {
                 0 => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
                 1 => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
-                _ => ops.push(Op::Invalid),
+                _ => unreachable!(),
             },
             (true, true, false) => match op % 2 {
                 0 => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
                 1 => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),
-                _ => ops.push(Op::Invalid),
+                _ => unreachable!(),
             },
             (true, false, true) => match op % 2 {
                 0 => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
                 1 => ops.push(Op::ReadWrite(tid, arng.gen(), arng.gen())),
-                _ => ops.push(Op::Invalid),
+                _ => unreachable!(),
             },
             (true, false, false) => ops.push(Op::ReadOnly(tid, arng.gen(), arng.gen())),
             (false, true, false) => ops.push(Op::WriteOnly(tid, arng.gen(), arng.gen())),

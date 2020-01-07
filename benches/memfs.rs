@@ -76,14 +76,6 @@ pub enum Operation {
         newparent: u64,
         newname: &'static OsStr,
     },
-    Invalid,
-}
-
-/// Default operations, don't do anything
-impl Default for Operation {
-    fn default() -> Operation {
-        Operation::Invalid
-    }
 }
 
 /// Potential responses from the file-system
@@ -97,12 +89,11 @@ pub enum Response {
     Create,
     Written(u64),
     Data(&'static [u8]),
-    Invalid,
 }
 
 impl Default for Response {
     fn default() -> Response {
-        Response::Invalid
+        Response::Empty
     }
 }
 
@@ -306,7 +297,6 @@ impl Dispatch for NrMemFilesystem {
                 Ok(()) => Ok(Response::Empty),
                 Err(e) => Err(ResponseError::Err(e)),
             },
-            Operation::Invalid => unreachable!("Got invalid OP"),
         }
     }
 }

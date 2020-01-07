@@ -14,14 +14,6 @@ pub enum Op {
     Push(u32),
     /// Pop item from stack
     Pop,
-    /// Invalid operation
-    Invalid,
-}
-
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
-    }
 }
 
 /// Single-threaded implementation of the stack
@@ -70,7 +62,6 @@ impl Dispatch for Stack {
                 return Ok(None);
             }
             Op::Pop => return Ok(self.pop()),
-            Op::Invalid => return Err(()),
         }
     }
 }

@@ -20,13 +20,6 @@ use rand::{thread_rng, Rng};
 enum Op {
     Push(u32),
     Pop,
-    Invalid,
-}
-
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
-    }
 }
 
 #[derive(Eq, PartialEq)]
@@ -66,7 +59,6 @@ impl Dispatch for Stack {
         match op {
             Op::Push(v) => self.push(v),
             Op::Pop => self.pop(),
-            Op::Invalid => panic!("Got invalid OP"),
         }
 
         Ok(None)
@@ -193,7 +185,6 @@ impl Dispatch for VerifyStack {
                     assert_eq!(per_replica_counter.len(), 8, "Popped a final element from a thread before seeing elements from every thread.");
                 }
             }
-            Op::Invalid => panic!("Got invalid OP"),
         }
 
         return Ok(None);

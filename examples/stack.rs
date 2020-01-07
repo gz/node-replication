@@ -13,14 +13,6 @@ use node_replication::Dispatch;
 enum Op {
     Push(u32),
     Pop,
-    Invalid,
-}
-
-/// We need to define a default operation.
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
-    }
 }
 
 /// The actual stack, it's represented by a vector underneath.
@@ -71,7 +63,6 @@ impl Dispatch for Stack {
                 return Ok(None);
             }
             Op::Pop => return Ok(self.pop()),
-            Op::Invalid => return Err(Some(())),
         }
     }
 }

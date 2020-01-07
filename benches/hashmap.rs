@@ -20,14 +20,6 @@ pub enum Op {
     Put(u64, u64),
     /// Get item from the hash-map.
     Get(u64),
-    /// Invalid operation
-    Invalid,
-}
-
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
-    }
 }
 
 /// Single-threaded implementation of the stack
@@ -70,7 +62,6 @@ impl Dispatch for NrHashMap {
                 Ok(None)
             }
             Op::Get(key) => return Ok(self.get(key)),
-            Op::Invalid => return Err(()),
         }
     }
 }

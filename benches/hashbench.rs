@@ -341,14 +341,6 @@ pub enum Op {
     Put(u64, u64),
     /// Get item from the hash-map.
     Get(u64),
-    /// Invalid operation
-    Invalid,
-}
-
-impl Default for Op {
-    fn default() -> Op {
-        Op::Invalid
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -388,7 +380,6 @@ impl Dispatch for NrHashMap {
                 Ok(0)
             }
             Op::Get(key) => return Ok(self.get(key)),
-            Op::Invalid => return Err(()),
         }
     }
 }

@@ -295,6 +295,7 @@ where
                             replica: idx,
                             alivef: true,
                         }));
+                        compiler_fence(Ordering::AcqRel);
                     },
                 }
             }

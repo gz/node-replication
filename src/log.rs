@@ -333,7 +333,10 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { !(*e).as_mut().is_some() } {
+            while unsafe {
+                !(*e).as_ref().is_some()
+                    || ((*e).as_ref().unwrap().alivef != self.lmasks[idx - 1].get())
+            } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
@@ -347,9 +350,9 @@ where
                 iteration += 1;
             }
 
-            if let Some(e) = unsafe { (*e).as_mut() } {
-                d((*e).operation.clone(), (*e).replica);
-            }
+            // The while loop above makes sure that the entry is always filled at this point.
+            let e = unsafe { (*e).as_ref().unwrap() };
+            d((*e).operation.clone(), (*e).replica);
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {

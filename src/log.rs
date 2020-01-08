@@ -93,6 +93,10 @@ where
     /// New appends go here.
     tail: CachePadded<AtomicUsize>,
 
+    /// Completed tail maintains an index <= tail that points to a
+    /// log entry after which there are no completed operations.
+    ctail: CachePadded<AtomicUsize>,
+
     /// Array consisting of the local tail of each replica registered with the log.
     /// Required for garbage collection; since replicas make progress over the log
     /// independently, we want to make sure that we don't garbage collect operations
@@ -183,6 +187,7 @@ where
             slog: raw,
             head: CachePadded::new(AtomicUsize::new(0usize)),
             tail: CachePadded::new(AtomicUsize::new(0usize)),
+            ctail: CachePadded::new(AtomicUsize::new(0usize)),
             ltails: arr![Default::default(); 64],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
@@ -351,6 +356,8 @@ where
             }
         }
 
+        self.ctail.fetch_max(t, Ordering::Relaxed);
+
         // Update the replica's local tail.
         self.ltails[idx - 1].store(t, Ordering::Relaxed);
     }
@@ -437,6 +444,12 @@ where
             let e = self.slog[self.index(i)].as_ptr();
             (*e).alivef = false;
         }
+    }
+
+    pub fn is_replica_synced_for_reads(&self, idx: usize) -> (bool, usize) {
+        let read_tail = self.ctail.load(Ordering::Relaxed);
+        let local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+        return (local_tail < read_tail, read_tail);
     }
 }
 

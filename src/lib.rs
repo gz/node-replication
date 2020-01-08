@@ -3,6 +3,7 @@
 
 //! An operation-log based approach for data replication.
 //#![no_std]
+#![feature(atomic_min_max)]
 
 extern crate alloc;
 extern crate core;

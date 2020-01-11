@@ -52,7 +52,11 @@ impl Dispatch for BespinDispatcher {
     type Response = (u64, u64);
     type ResponseError = os_workload::KError;
 
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
+    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Opcode::Process(op, a1, a2, a3, a4) => {
                 return os_workload::syscall_handle(
@@ -89,7 +93,11 @@ impl Dispatch for PosixDispatcher {
     type Response = ();
     type ResponseError = ();
 
-    fn dispatch(&mut self, op: Self::Operation) -> Result<(), ()> {
+    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
+    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<(), ()> {
         use nix::sys::mman::{MapFlags, ProtFlags};
 
         match op {
@@ -239,7 +247,7 @@ fn vspace_scale_out(c: &mut Criterion) {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    replica.execute(*op, rid, false);
                     let mut i = 1;
                     while replica.get_responses(rid, &mut o) == 0 {
                         if i % mkbench::WARN_THRESHOLD == 0 {

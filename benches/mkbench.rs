@@ -67,7 +67,7 @@ pub fn baseline_comparison<T: Dispatch + Default>(
     group.bench_function("baseline", |b| {
         b.iter(|| {
             for i in 0..ops.len() {
-                s.dispatch(ops[i].clone());
+                s.dispatch_mut(ops[i].clone());
             }
         })
     });
@@ -81,7 +81,7 @@ pub fn baseline_comparison<T: Dispatch + Default>(
         b.iter(|| {
             let mut o = vec![];
             for i in 0..ops.len() {
-                r.execute(ops[i].clone(), ridx);
+                r.execute(ops[i].clone(), ridx, false);
                 while r.get_responses(ridx, &mut o) == 0 {}
                 o.clear();
             }

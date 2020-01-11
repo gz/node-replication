@@ -202,8 +202,12 @@ impl Dispatch for NrMemFilesystem {
     type Response = Response;
     type ResponseError = ResponseError;
 
+    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Operation::GetAttr { ino } => match self.getattr(ino) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
@@ -362,7 +366,7 @@ fn memfs_scale_out(c: &mut Criterion) {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    replica.execute(*op, rid, false);
                     let mut i = 1;
                     while replica.get_responses(rid, &mut o) == 0 {
                         if i % mkbench::WARN_THRESHOLD == 0 {

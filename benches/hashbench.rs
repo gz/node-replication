@@ -372,8 +372,12 @@ impl Dispatch for NrHashMap {
     type Response = u64;
     type ResponseError = ();
 
+    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Put(key, val) => {
                 self.put(key, val);
@@ -403,7 +407,7 @@ impl<'a> ReplicaAndToken<'a> {
 
 impl<'a> Backend for ReplicaAndToken<'a> {
     fn b_get(&mut self, key: u64) -> u64 {
-        self.replica.execute(Op::Get(key), self.token);
+        self.replica.execute(Op::Get(key), self.token, false);
         let mut i = 1;
         while self.replica.get_responses(self.token, &mut self.responses) == 0 {
             if i % (1024 * 1024 * 2) == 0 {
@@ -423,7 +427,7 @@ impl<'a> Backend for ReplicaAndToken<'a> {
     }
 
     fn b_put(&mut self, key: u64, value: u64) {
-        self.replica.execute(Op::Put(key, value), self.token);
+        self.replica.execute(Op::Put(key, value), self.token, false);
         let mut i = 1;
         while self.replica.get_responses(self.token, &mut self.responses) == 0 {
             if i % (1024 * 1024 * 2) == 0 {

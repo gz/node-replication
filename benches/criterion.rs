@@ -59,7 +59,7 @@ fn stack_scale_out(c: &mut Criterion) {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    replica.execute(*op, rid, false);
                     let mut i = 1;
                     while replica.get_responses(rid, &mut o) == 0 {
                         if i % mkbench::WARN_THRESHOLD == 0 {
@@ -113,7 +113,7 @@ fn synthetic_scale_out(c: &mut Criterion) {
                 for op in ops {
                     let mut op = *op;
                     op.set_tid(cid as usize);
-                    replica.execute(op, rid);
+                    replica.execute(op, rid, false);
                     let mut i = 1;
                     while replica.get_responses(rid, &mut o) == 0 {
                         if i % mkbench::WARN_THRESHOLD == 0 {
@@ -189,7 +189,7 @@ fn hashmap_scale_out(c: &mut Criterion) {
                     hashmap::Op::Get(id)
                 };
 
-                replica.execute(op, rid);
+                replica.execute(op, rid, false);
                 let mut i = 1;
                 while replica.get_responses(rid, &mut o) == 0 {
                     if i % mkbench::WARN_THRESHOLD == 0 {

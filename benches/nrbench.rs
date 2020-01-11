@@ -146,7 +146,7 @@ fn main() {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    replica.execute(*op, rid, false);
                     while replica.get_responses(rid, &mut o) == 0 {}
                     o.clear();
                 }
@@ -159,7 +159,7 @@ fn main() {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    replica.execute(*op, rid, false);
                     while replica.get_responses(rid, &mut o) == 0 {}
                     o.clear();
                 }
@@ -172,7 +172,7 @@ fn main() {
             |_cid, rid, _log, replica, ops, _batch_size| {
                 let mut o = vec![];
                 for op in ops {
-                    replica.execute(*op, rid);
+                    replica.execute(*op, rid, false);
                     while replica.get_responses(rid, &mut o) == 0 {}
                     o.clear();
                 }

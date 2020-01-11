@@ -12,7 +12,14 @@ impl Dispatch for Nop {
     type Response = ();
     type ResponseError = ();
 
-    fn dispatch(&mut self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
+    fn dispatch_mut(
+        &mut self,
+        _op: Self::Operation,
+    ) -> Result<Self::Response, Self::ResponseError> {
         Ok(unreachable!())
     }
 }

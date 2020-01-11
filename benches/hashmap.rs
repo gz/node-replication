@@ -54,8 +54,12 @@ impl Dispatch for NrHashMap {
     type Response = Option<u64>;
     type ResponseError = ();
 
+    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        unreachable!()
+    }
+
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Put(key, val) => {
                 self.put(key, val);

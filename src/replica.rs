@@ -1,9 +1,10 @@
 // Copyright © 2019 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use core::cell::{RefCell, RefMut};
+use core::cell::RefCell;
 use core::mem::transmute;
 use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
+use std::sync::RwLock;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -76,7 +77,12 @@ where
 
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own.
-    data: RefCell<D>,
+    data: CachePadded<RwLock<D>>,
+
+    /// Array that will hold all responses for read-only operations to be appended to a thread
+    /// local vector for which the results are obtained on executing them against a replica.
+    responses: [RefCell<Vec<Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>>>;
+        MAX_THREADS_PER_REPLICA],
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -126,7 +132,8 @@ where
                     >::batch_size(),
             )),
             slog: log.clone(),
-            data: RefCell::new(D::default()),
+            data: CachePadded::new(RwLock::new(D::default())),
+            responses: arr![Default::default(); 128],
         }
     }
 
@@ -149,16 +156,37 @@ where
         }
     }
 
+    fn read_only(&self, op: <D as Dispatch>::Operation, idx: usize) {
+        if self.slog.is_replica_synced_for_reads(idx).0 == true {
+            let data = self.data.read().unwrap();
+
+            // Execute any operations on the shared log against this replica.
+            let f = |op: <D as Dispatch>::Operation, i: usize| {
+                let resp = data.dispatch(op);
+                if i == self.idx {
+                    self.responses[idx - 1].borrow_mut().push(resp);
+                }
+            };
+            f(op.clone(), idx);
+        } else {
+            self.try_combine(idx);
+        }
+    }
+
     /// Executes an operation against this replica.
     ///
     /// `idx` is an identifier for the thread performing the execute operation.
     ///
     /// In addition to the supplied operation, this method might execute operations that were
     /// received on a different replica and appended to the shared log.
-    pub fn execute(&self, op: <D as Dispatch>::Operation, idx: usize) {
+    pub fn execute(&self, op: <D as Dispatch>::Operation, idx: usize, is_read_only: bool) {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        while !self.make_pending(op.clone(), idx) {}
-        self.try_combine(idx);
+        if is_read_only == false {
+            while !self.make_pending(op.clone(), idx) {}
+            self.try_combine(idx);
+        } else {
+            self.read_only(op.clone(), idx);
+        }
     }
 
     /// Appends any pending responses to operations issued by this thread into a passed in
@@ -175,7 +203,9 @@ where
         let interval = 1 << 29;
 
         // No waiting requests. Just return to the caller.
-        if self.contexts[idx - 1].tail.get() == self.contexts[idx - 1].head.get() {
+        if self.contexts[idx - 1].tail.get() == self.contexts[idx - 1].head.get()
+            && self.responses[idx - 1].borrow().len() == 0
+        {
             return 0;
         }
 
@@ -183,8 +213,10 @@ where
         // times with no luck, try to perform flat combining to make some progress.
         loop {
             self.contexts[idx - 1].res(buf);
+            unsafe { buf.append(&mut *self.responses[idx - 1].as_ptr()) };
             let next = buf.len();
             if next > prev {
+                self.responses[idx - 1].borrow_mut().clear();
                 return next - prev;
             };
 
@@ -200,7 +232,7 @@ where
     /// Executes a passed in closure against the replica's underlying data
     /// structure. Useful for unit testing; can be used to verify certain properties
     /// of the data structure after issuing a bunch of operations against it.
-    pub fn verify<F: FnMut(RefMut<D>)>(&self, mut v: F) {
+    pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
         while self
@@ -209,15 +241,16 @@ where
             != 0
         {}
 
-        let mut data = self.data.borrow_mut();
-        let mut f = |o: <D as Dispatch>::Operation, _i: usize| match data.dispatch(o) {
+        let mut data = self.data.write().unwrap();
+
+        let mut f = |o: <D as Dispatch>::Operation, _i: usize| match data.dispatch_mut(o) {
             Ok(_) => {}
             Err(_) => error!("Error in operation dispatch"),
         };
 
         self.slog.exec(self.idx, &mut f);
 
-        v(data);
+        v(&data);
 
         self.combiner.store(0, Ordering::Release);
     }
@@ -277,6 +310,8 @@ where
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
     fn combine(&self) {
+        let mut data = self.data.write().unwrap();
+
         let mut b = self.buffer.borrow_mut();
         let mut o = self.inflight.borrow_mut();
         let mut r = self.result.borrow_mut();
@@ -294,9 +329,8 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
-            let mut d = self.data.borrow_mut();
             let f = |o: <D as Dispatch>::Operation, i: usize| {
-                let resp = d.dispatch(o);
+                let resp = data.dispatch_mut(o);
                 if i == self.idx {
                     r.push(resp);
                 }
@@ -305,9 +339,9 @@ where
         }
 
         // Execute any operations on the shared log against this replica.
-        let mut data = self.data.borrow_mut();
+
         let mut f = |o: <D as Dispatch>::Operation, i: usize| {
-            let resp = data.dispatch(o);
+            let resp = data.dispatch_mut(o);
             if i == self.idx {
                 r.push(resp)
             };
@@ -346,7 +380,11 @@ mod test {
         type Response = u64;
         type ResponseError = ();
 
-        fn dispatch(
+        fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+            Err(())
+        }
+
+        fn dispatch_mut(
             &mut self,
             _op: Self::Operation,
         ) -> Result<Self::Response, Self::ResponseError> {
@@ -373,7 +411,7 @@ mod test {
             repl.result.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, u64, ()>::batch_size()
         );
-        assert_eq!(repl.data.borrow().junk, 0);
+        assert_eq!(repl.data.read().unwrap().junk, 0);
     }
 
     // Tests whether we can register with this replica and receive an idx.
@@ -436,7 +474,7 @@ mod test {
         repl.contexts[0].res(&mut r);
 
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
-        assert_eq!(repl.data.borrow().junk, 1);
+        assert_eq!(repl.data.read().unwrap().junk, 1);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0], Ok(107));
     }
@@ -453,7 +491,7 @@ mod test {
         repl.try_combine(1);
         repl.contexts[7].res(&mut r);
 
-        assert_eq!(repl.data.borrow().junk, 1);
+        assert_eq!(repl.data.read().unwrap().junk, 1);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0], Ok(107));
     }
@@ -471,7 +509,7 @@ mod test {
         repl.try_combine(1);
         repl.contexts[0].res(&mut r);
 
-        assert_eq!(repl.data.borrow().junk, 0);
+        assert_eq!(repl.data.read().unwrap().junk, 0);
         assert_eq!(r.len(), 0);
     }
 
@@ -482,9 +520,9 @@ mod test {
         let repl = Replica::<Data>::new(&slog);
         let _idx = repl.register();
 
-        repl.execute(121, 1);
+        repl.execute(121, 1, false);
 
-        assert_eq!(repl.data.borrow().junk, 1);
+        assert_eq!(repl.data.read().unwrap().junk, 1);
     }
 
     // Tests whether calling execute() when there already is a combiner makes the operation
@@ -496,12 +534,12 @@ mod test {
         let mut o = vec![];
 
         repl.combiner.store(8, Ordering::SeqCst);
-        repl.execute(121, 1);
+        repl.execute(121, 1, false);
 
         assert_eq!(repl.contexts[0].ops(&mut o), 1);
         assert_eq!(o.len(), 1);
         assert_eq!(o[0], 121);
-        assert_eq!(repl.data.borrow().junk, 0);
+        assert_eq!(repl.data.read().unwrap().junk, 0);
     }
 
     // Tests whether get_responses() retrieves responses to an operation that was executed
@@ -513,7 +551,7 @@ mod test {
         let _idx = repl.register();
         let mut r = vec![];
 
-        repl.execute(121, 1);
+        repl.execute(121, 1, false);
 
         assert_eq!(repl.get_responses(1, &mut r), 1);
         assert_eq!(r.len(), 1);

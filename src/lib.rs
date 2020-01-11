@@ -28,5 +28,6 @@ pub trait Dispatch {
     type Response: Sized + Copy + Default;
     type ResponseError: Sized + Copy + Default;
 
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError>;
+    fn dispatch(&self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError>;
+    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError>;
 }

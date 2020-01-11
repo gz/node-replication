@@ -54,9 +54,12 @@ impl Dispatch for Stack {
     type Response = Option<u32>;
     type ResponseError = Option<()>;
 
+    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        Err(None)
+    }
     /// The dispatch traint defines how operations coming from the log
     /// are execute against our local stack within a replica.
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Push(v) => {
                 self.push(v);
@@ -78,8 +81,8 @@ fn main() {
     for i in 0..1024 {
         let mut o = vec![];
         match i % 2 {
-            0 => replica.execute(Op::Push(i as u32), ridx),
-            1 => replica.execute(Op::Pop, ridx),
+            0 => replica.execute(Op::Push(i as u32), ridx, false),
+            1 => replica.execute(Op::Pop, ridx, false),
             _ => unreachable!(),
         };
         while replica.get_responses(ridx, &mut o) == 0 {}

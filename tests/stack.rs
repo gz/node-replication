@@ -4,7 +4,7 @@
 extern crate rand;
 extern crate std;
 
-use std::cell::{RefCell, RefMut};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -55,7 +55,11 @@ impl Dispatch for Stack {
     type Response = Option<u32>;
     type ResponseError = ();
 
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        Ok(None)
+    }
+
+    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Push(v) => self.push(v),
             Op::Pop => self.pop(),
@@ -85,7 +89,7 @@ fn sequential_test() {
     // Populate with some initial data
     for _i in 0..50 {
         let element = orng.gen();
-        r.execute(Op::Push(element), idx);
+        r.execute(Op::Push(element), idx, false);
         r.get_responses(idx, &mut o);
         o.clear();
         correct_stack.push(element);
@@ -95,12 +99,12 @@ fn sequential_test() {
         let op: usize = orng.gen();
         match op % 2usize {
             0usize => {
-                r.execute(Op::Pop, idx);
+                r.execute(Op::Pop, idx, false);
                 correct_popped.push(correct_stack.pop());
             }
             1usize => {
                 let element = orng.gen();
-                r.execute(Op::Push(element), idx);
+                r.execute(Op::Push(element), idx, false);
                 correct_stack.push(element);
             }
             _ => unreachable!(),
@@ -109,7 +113,7 @@ fn sequential_test() {
         o.clear();
     }
 
-    let v = |data: RefMut<Stack>| {
+    let v = |data: &Stack| {
         assert_eq!(correct_popped, data.popped, "Pop operation error detected");
         assert_eq!(correct_stack, data.storage, "Push operation error detected");
     };
@@ -149,7 +153,11 @@ impl Dispatch for VerifyStack {
     type Response = Option<u32>;
     type ResponseError = Option<()>;
 
-    fn dispatch(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        Err(None)
+    }
+
+    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Push(v) => {
                 let _tid = (v & 0xffff) as u16;
@@ -227,7 +235,7 @@ fn parallel_push_sequential_pop_test() {
                 // 1. Insert phase
                 b.wait();
                 for i in 0..nop {
-                    replica.execute(Op::Push((i as u32) << 16 | tid), idx);
+                    replica.execute(Op::Push((i as u32) << 16 | tid), idx, false);
                     while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();
                 }
@@ -250,7 +258,7 @@ fn parallel_push_sequential_pop_test() {
         let mut o = vec![];
         for _j in 0..t {
             for _z in 0..nop {
-                replica.execute(Op::Pop, 1);
+                replica.execute(Op::Pop, 1, false);
                 replica.get_responses(1, &mut o);
                 o.clear();
             }
@@ -295,7 +303,7 @@ fn parallel_push_and_pop_test() {
                 // 1. Insert phase
                 b.wait();
                 for i in 0..nop {
-                    replica.execute(Op::Push((i as u32) << 16 | tid), idx);
+                    replica.execute(Op::Push((i as u32) << 16 | tid), idx, false);
                     while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();
                 }
@@ -303,7 +311,7 @@ fn parallel_push_and_pop_test() {
                 // 2. Dequeue phase, verification
                 b.wait();
                 for _i in 0..nop {
-                    replica.execute(Op::Pop, idx);
+                    replica.execute(Op::Pop, idx, false);
                     while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();
                 }
@@ -340,7 +348,7 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
     barrier.wait();
 
     for i in 0..nop {
-        r.execute(ops[i], idx);
+        r.execute(ops[i], idx, false);
         while r.get_responses(idx, &mut o) == 0 {}
         o.clear();
     }
@@ -391,7 +399,7 @@ fn replicas_are_equal() {
 
     let mut d0 = vec![];
     let mut p0 = vec![];
-    let v = |data: RefMut<Stack>| {
+    let v = |data: &Stack| {
         d0.extend_from_slice(&data.storage);
         p0.extend_from_slice(&data.popped);
     };
@@ -399,7 +407,7 @@ fn replicas_are_equal() {
 
     let mut d1 = vec![];
     let mut p1 = vec![];
-    let v = |data: RefMut<Stack>| {
+    let v = |data: &Stack| {
         d1.extend_from_slice(&data.storage);
         p1.extend_from_slice(&data.popped);
     };

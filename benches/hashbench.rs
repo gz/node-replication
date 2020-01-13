@@ -387,7 +387,7 @@ impl Dispatch for NrHashMap {
 struct ReplicaAndToken<'a> {
     replica: sync::Arc<Replica<'a, NrHashMap>>,
     token: usize,
-    responses: Vec<u64>,
+    responses: Vec<Result<u64, ()>>,
 }
 
 impl<'a> ReplicaAndToken<'a> {
@@ -416,7 +416,10 @@ impl<'a> Backend for ReplicaAndToken<'a> {
         }
         let r = self.responses[0];
         self.responses.clear();
-        r
+        match r {
+            Ok(res) => return res,
+            Err(_) => unreachable!(),
+        }
     }
 
     fn b_put(&mut self, key: u64, value: u64) {

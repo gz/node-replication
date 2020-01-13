@@ -164,7 +164,11 @@ where
     /// Appends any pending responses to operations issued by this thread into a passed in
     /// buffer/vector. Returns the number of responses that were appended. Blocks until
     /// some responses can be returned.
-    pub fn get_responses(&self, idx: usize, buf: &mut Vec<<D as Dispatch>::Response>) -> usize {
+    pub fn get_responses(
+        &self,
+        idx: usize,
+        buf: &mut Vec<Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>>,
+    ) -> usize {
         let prev = buf.len();
 
         let mut iter = 0;
@@ -434,7 +438,7 @@ mod test {
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.data.borrow().junk, 1);
         assert_eq!(r.len(), 1);
-        assert_eq!(r[0], 107);
+        assert_eq!(r[0], Ok(107));
     }
 
     // Tests whether try_combine() also applies pending operations on other threads to the log.
@@ -451,7 +455,7 @@ mod test {
 
         assert_eq!(repl.data.borrow().junk, 1);
         assert_eq!(r.len(), 1);
-        assert_eq!(r[0], 107);
+        assert_eq!(r[0], Ok(107));
     }
 
     // Tests whether try_combine() fails if someone else is currently flat combining.
@@ -513,7 +517,7 @@ mod test {
 
         assert_eq!(repl.get_responses(1, &mut r), 1);
         assert_eq!(r.len(), 1);
-        assert_eq!(r[0], 107);
+        assert_eq!(r[0], Ok(107));
     }
 
     // Tests whether get_responses() does not retrieve anything when an operation hasn't

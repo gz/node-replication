@@ -32,7 +32,7 @@ where
 {
     /// Array that will hold all pending operations to be appended to the shared log as
     /// well as the results obtained on executing them against a replica.
-    batch: [CachePadded<Cell<(Option<T>, R, E)>>; MAX_PENDING_OPS],
+    batch: [CachePadded<Cell<(Option<T>, Result<R, E>)>>; MAX_PENDING_OPS],
 
     /// Logical array index at which new operations will be enqueued into the batch.
     /// This variable is updated by the thread that owns this context, and is read by the
@@ -57,10 +57,10 @@ where
 {
     /// Default constructor for the context.
     fn default() -> Context<T, R, E> {
-        let mut batch: [CachePadded<Cell<(Option<T>, R, E)>>; MAX_PENDING_OPS] =
+        let mut batch: [CachePadded<Cell<(Option<T>, Result<R, E>)>>; MAX_PENDING_OPS] =
             unsafe { ::core::mem::MaybeUninit::zeroed().assume_init() };
         for elem in &mut batch[..] {
-            *elem = CachePadded::new(Cell::new((None, Default::default(), Default::default())));
+            *elem = CachePadded::new(Cell::new((None, Err(Default::default()))));
         }
 
         Context {
@@ -120,10 +120,7 @@ where
         for i in 0..n {
             let e = self.batch[self.index(h + i)].as_ptr();
             unsafe {
-                match responses[i] {
-                    Ok(res) => (*e).1 = res,
-                    Err(err) => (*e).2 = err,
-                }
+                (*e).1 = responses[i];
             }
         }
 
@@ -173,7 +170,7 @@ where
 
     /// Appends any responses/results to enqueued operations into a passed in buffer.
     #[inline(always)]
-    pub fn res(&self, buffer: &mut Vec<R>) {
+    pub fn res(&self, buffer: &mut Vec<Result<R, E>>) {
         let mut s = self.head.get();
         let f = self.comb.get();
 
@@ -234,7 +231,7 @@ mod test {
     fn test_context_enqueue() {
         let c = Context::<u64, u64, ()>::default();
         assert!(c.enqueue(121));
-        assert_eq!(c.batch[0].take().0, Some(121));
+        unsafe { assert_eq!((*c.batch[0].as_ptr()).0, Some(121)) };
         assert_eq!(c.tail.take(), 1);
         assert_eq!(c.head.take(), 0);
         assert_eq!(c.comb.take(), 0);
@@ -266,10 +263,10 @@ mod test {
         assert_eq!(c.head.get(), 0);
         assert_eq!(c.comb.get(), 16);
 
-        assert_eq!(c.batch[12].get().1, 11);
-        assert_eq!(c.batch[13].get().1, 12);
-        assert_eq!(c.batch[14].get().1, 13);
-        assert_eq!(c.batch[15].get().1, 14);
+        assert_eq!(c.batch[12].get().1, r[0]);
+        assert_eq!(c.batch[13].get().1, r[1]);
+        assert_eq!(c.batch[14].get().1, r[2]);
+        assert_eq!(c.batch[15].get().1, r[3]);
     }
 
     // Tests that attempting to enqueue an empty batch of responses on the context
@@ -341,10 +338,10 @@ mod test {
         assert_eq!(c.comb.get(), 4);
 
         assert_eq!(o.len(), 4);
-        assert_eq!(o[0], r[0].unwrap());
-        assert_eq!(o[1], r[1].unwrap());
-        assert_eq!(o[2], r[2].unwrap());
-        assert_eq!(o[3], r[3].unwrap());
+        assert_eq!(o[0], r[0]);
+        assert_eq!(o[1], r[1]);
+        assert_eq!(o[2], r[2]);
+        assert_eq!(o[3], r[3]);
     }
 
     // Tests that we cannot retrieve responses when none were enqueued to begin with.

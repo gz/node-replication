@@ -77,12 +77,13 @@ where
 
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own.
-    data: CachePadded<RwLock<D>>,
+    data: RwLock<D>,
 
     /// Array that will hold all responses for read-only operations to be appended to a thread
     /// local vector for which the results are obtained on executing them against a replica.
-    responses: [RefCell<Vec<Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>>>;
-        MAX_THREADS_PER_REPLICA],
+    responses: [CachePadded<
+        RefCell<Vec<Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>>>,
+    >; MAX_THREADS_PER_REPLICA],
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -132,8 +133,8 @@ where
                     >::batch_size(),
             )),
             slog: log.clone(),
-            data: CachePadded::new(RwLock::new(D::default())),
-            responses: arr![Default::default(); 128],
+            data: RwLock::new(D::default()),
+            responses: arr![CachePadded::new(Default::default()); 128],
         }
     }
 
@@ -156,20 +157,31 @@ where
         }
     }
 
-    fn read_only(&self, op: <D as Dispatch>::Operation, idx: usize) {
-        if self.slog.is_replica_synced_for_reads(idx).0 == true {
-            let data = self.data.read().unwrap();
-
-            // Execute any operations on the shared log against this replica.
-            let f = |op: <D as Dispatch>::Operation, i: usize| {
-                let resp = data.dispatch(op);
-                if i == self.idx {
-                    self.responses[idx - 1].borrow_mut().push(resp);
-                }
-            };
-            f(op.clone(), idx);
-        } else {
-            self.try_combine(idx);
+    fn read_only(&self, op: <D as Dispatch>::Operation, tid: usize) {
+        loop {
+            if self.slog.is_replica_synced_for_reads(self.idx) == true {
+                let data = self.data.read().unwrap();
+                // Execute any operations on the shared log against this replica.
+                let f = |op: <D as Dispatch>::Operation, i: usize| {
+                    let resp = data.dispatch(op);
+                    if i == self.idx {
+                        self.responses[tid - 1].borrow_mut().push(resp);
+                    }
+                };
+                // This function only returns when the read-op is completed.
+                return f(op.clone(), self.idx);
+            } else {
+                let mut data = self.data.write().unwrap();
+                // Reader acquired the writer lock and will try to update the replica.
+                let mut f = |o: <D as Dispatch>::Operation, i: usize| {
+                    let resp = data.dispatch_mut(o);
+                    if i == self.idx {
+                        self.responses[tid - 1].borrow_mut().push(resp);
+                    }
+                };
+                // Update the local replica till readTail.
+                self.slog.exec_read_tail(self.idx, &mut f);
+            }
         }
     }
 

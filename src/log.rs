@@ -308,6 +308,46 @@ where
         }
     }
 
+    /// Executes a passed in closure (`d`) on operations till readTail, starting from
+    /// a replica's local tail on the shared log. The replica is identified through an
+    /// `idx` passed in as an argument.
+    ///
+    /// The passed in closure is expected to take in two arguments: The operation
+    /// from the shared log to be executed and the replica that issued it.
+    pub fn exec_read_tail<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let h = self.head.load(Ordering::Relaxed);
+        let read_tail = self.ctail.load(Ordering::Relaxed);
+
+        // Load the logical log offset from which we must execute operations.
+        let f = self.ltails[idx - 1].load(Ordering::Relaxed);
+
+        if f >= read_tail {
+            return;
+        }
+
+        // Make sure we're within the shared log. If we aren't, then panic.
+        if h > f || read_tail > tail {
+            panic!("Read tail not within the shared log!");
+        }
+
+        // Execute all operations from localTail to readTail in replica.
+        for i in f..read_tail {
+            let e = self.slog[self.index(i)].as_ptr();
+
+            unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
+
+            // Looks like we're going to wrap around now; flip this replica's local mask.
+            if self.index(i) == self.size - 1 {
+                self.lmasks[idx - 1].set(!self.lmasks[idx - 1].get());
+                trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
+            }
+        }
+
+        // Update the replica's local tail.
+        self.ltails[idx - 1].store(read_tail, Ordering::Relaxed);
+    }
+
     /// Executes a passed in closure (`d`) on all operations starting from
     /// a replica's local tail on the shared log. The replica is identified through an
     /// `idx` passed in as an argument.
@@ -446,10 +486,10 @@ where
         }
     }
 
-    pub fn is_replica_synced_for_reads(&self, idx: usize) -> (bool, usize) {
+    pub fn is_replica_synced_for_reads(&self, idx: usize) -> bool {
         let read_tail = self.ctail.load(Ordering::Relaxed);
         let local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
-        return (local_tail < read_tail, read_tail);
+        return local_tail >= read_tail;
     }
 }
 

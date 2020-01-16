@@ -20,12 +20,14 @@ use rand::{thread_rng, Rng};
 enum Op {
     Push(u32),
     Pop,
+    Peek,
 }
 
 #[derive(Eq, PartialEq)]
 struct Stack {
     storage: Vec<u32>,
     popped: Vec<Option<u32>>,
+    peeked: RefCell<Vec<Option<u32>>>,
 }
 
 impl Stack {
@@ -37,6 +39,15 @@ impl Stack {
         let r = self.storage.pop();
         self.popped.push(r);
     }
+
+    pub fn peek(&self) {
+        let mut r = None;
+        let len = self.storage.len();
+        if len > 0 {
+            r = Some(self.storage[len - 1]);
+        }
+        self.peeked.borrow_mut().push(r);
+    }
 }
 
 impl Default for Stack {
@@ -44,6 +55,7 @@ impl Default for Stack {
         let s = Stack {
             storage: Default::default(),
             popped: Default::default(),
+            peeked: Default::default(),
         };
 
         s
@@ -55,14 +67,19 @@ impl Dispatch for Stack {
     type Response = Option<u32>;
     type ResponseError = ();
 
-    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
-        Ok(None)
+    fn dispatch(&self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        match op {
+            Op::Peek => self.peek(),
+            _ => unreachable!(),
+        };
+        Err(())
     }
 
     fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             Op::Push(v) => self.push(v),
             Op::Pop => self.pop(),
+            _ => unreachable!(),
         }
 
         Ok(None)
@@ -85,6 +102,7 @@ fn sequential_test() {
     let mut o = vec![];
     let mut correct_stack: Vec<u32> = Vec::new();
     let mut correct_popped: Vec<Option<u32>> = Vec::new();
+    let correct_peeked: RefCell<Vec<Option<u32>>> = RefCell::new(Vec::new());
 
     // Populate with some initial data
     for _i in 0..50 {
@@ -97,7 +115,7 @@ fn sequential_test() {
 
     for _i in 0..nop {
         let op: usize = orng.gen();
-        match op % 2usize {
+        match op % 3usize {
             0usize => {
                 r.execute(Op::Pop, idx, false);
                 correct_popped.push(correct_stack.pop());
@@ -106,6 +124,15 @@ fn sequential_test() {
                 let element = orng.gen();
                 r.execute(Op::Push(element), idx, false);
                 correct_stack.push(element);
+            }
+            2usize => {
+                r.execute(Op::Peek, idx, true);
+                let mut r = None;
+                let len = correct_stack.len();
+                if len > 0 {
+                    r = Some(correct_stack[len - 1]);
+                }
+                correct_peeked.borrow_mut().push(r);
             }
             _ => unreachable!(),
         }
@@ -116,6 +143,7 @@ fn sequential_test() {
     let v = |data: &Stack| {
         assert_eq!(correct_popped, data.popped, "Pop operation error detected");
         assert_eq!(correct_stack, data.storage, "Push operation error detected");
+        assert_eq!(correct_peeked, data.peeked, "Peek operation error detected");
     };
     r.verify(v);
 }
@@ -135,6 +163,10 @@ impl VerifyStack {
     pub fn pop(&self) -> u32 {
         self.storage.borrow_mut().pop().unwrap()
     }
+
+    pub fn peek(&self) -> u32 {
+        self.storage.borrow().last().unwrap().clone()
+    }
 }
 
 impl Default for VerifyStack {
@@ -153,8 +185,14 @@ impl Dispatch for VerifyStack {
     type Response = Option<u32>;
     type ResponseError = Option<()>;
 
-    fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
-        Err(None)
+    fn dispatch(&self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        match op {
+            Op::Peek => {
+                self.peek();
+            }
+            _ => unreachable!(),
+        }
+        Ok(None)
     }
 
     fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
@@ -193,6 +231,7 @@ impl Dispatch for VerifyStack {
                     assert_eq!(per_replica_counter.len(), 8, "Popped a final element from a thread before seeing elements from every thread.");
                 }
             }
+            _ => unreachable!(),
         }
 
         return Ok(None);
@@ -258,8 +297,12 @@ fn parallel_push_sequential_pop_test() {
         let mut o = vec![];
         for _j in 0..t {
             for _z in 0..nop {
-                replica.execute(Op::Pop, 1, false);
-                replica.get_responses(1, &mut o);
+                replica.execute(Op::Peek, i + 1, true);
+                replica.get_responses(i + 1, &mut o);
+                o.clear();
+
+                replica.execute(Op::Pop, i + 1, false);
+                replica.get_responses(i + 1, &mut o);
                 o.clear();
             }
         }
@@ -311,6 +354,10 @@ fn parallel_push_and_pop_test() {
                 // 2. Dequeue phase, verification
                 b.wait();
                 for _i in 0..nop {
+                    replica.execute(Op::Peek, idx, true);
+                    while replica.get_responses(idx, &mut o) == 0 {}
+                    o.clear();
+
                     replica.execute(Op::Pop, idx, false);
                     while replica.get_responses(idx, &mut o) == 0 {}
                     o.clear();

@@ -52,7 +52,7 @@ where
     /// Static array of thread contexts. Threads buffer operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
     contexts: [Context<
-        <D as Dispatch>::Operation,
+        <D as Dispatch>::WriteOperation,
         <D as Dispatch>::Response,
         <D as Dispatch>::ResponseError,
     >; MAX_THREADS_PER_REPLICA],
@@ -60,7 +60,7 @@ where
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
     /// the cost of the compare_and_swap() on the tail of the log.
-    buffer: RefCell<Vec<<D as Dispatch>::Operation>>,
+    buffer: RefCell<Vec<<D as Dispatch>::WriteOperation>>,
 
     /// Number of operations collected by the combiner from each thread at any
     /// given point of time. Index `i` holds the number of operations collected from
@@ -73,7 +73,7 @@ where
 
     /// Reference to the shared log that operations will be appended to and the
     /// data structure will be updated from.
-    slog: Arc<Log<'a, <D as Dispatch>::Operation>>,
+    slog: Arc<Log<'a, <D as Dispatch>::WriteOperation>>,
 
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own.
@@ -107,7 +107,7 @@ where
     ///
     /// Takes in a reference to the shared log as an argument. The Log is assumed to
     /// outlive the replica. The replica is bound to the log's lifetime.
-    pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::Operation>>) -> Replica<'b, D> {
+    pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>) -> Replica<'b, D> {
         use arr_macro::arr;
 
         Replica {
@@ -118,7 +118,7 @@ where
             buffer: RefCell::new(Vec::with_capacity(
                 MAX_THREADS_PER_REPLICA
                     * Context::<
-                        <D as Dispatch>::Operation,
+                        <D as Dispatch>::WriteOperation,
                         <D as Dispatch>::Response,
                         <D as Dispatch>::ResponseError,
                     >::batch_size(),
@@ -127,7 +127,7 @@ where
             result: RefCell::new(Vec::with_capacity(
                 MAX_THREADS_PER_REPLICA
                     * Context::<
-                        <D as Dispatch>::Operation,
+                        <D as Dispatch>::WriteOperation,
                         <D as Dispatch>::Response,
                         <D as Dispatch>::ResponseError,
                     >::batch_size(),
@@ -157,12 +157,12 @@ where
         }
     }
 
-    fn read_only(&self, op: <D as Dispatch>::Operation, tid: usize) {
+    fn read_only(&self, op: <D as Dispatch>::ReadOperation, tid: usize) {
         loop {
             if self.slog.is_replica_synced_for_reads(self.idx) == true {
                 let data = self.data.read().unwrap();
                 // Execute any operations on the shared log against this replica.
-                let f = |op: <D as Dispatch>::Operation, i: usize| {
+                let f = |op: <D as Dispatch>::ReadOperation, i: usize| {
                     let resp = data.dispatch(op);
                     if i == self.idx {
                         self.responses[tid - 1].borrow_mut().push(resp);
@@ -173,7 +173,7 @@ where
             } else {
                 let mut data = self.data.write().unwrap();
                 // Reader acquired the writer lock and will try to update the replica.
-                let mut f = |o: <D as Dispatch>::Operation, i: usize| {
+                let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                     let resp = data.dispatch_mut(o);
                     if i == self.idx {
                         self.responses[tid - 1].borrow_mut().push(resp);
@@ -185,20 +185,26 @@ where
         }
     }
 
-    /// Executes an operation against this replica.
+    /// Executes an mutable operation against this replica.
     ///
     /// `idx` is an identifier for the thread performing the execute operation.
     ///
     /// In addition to the supplied operation, this method might execute operations that were
     /// received on a different replica and appended to the shared log.
-    pub fn execute(&self, op: <D as Dispatch>::Operation, idx: usize, is_read_only: bool) {
+    pub fn execute(&self, op: <D as Dispatch>::WriteOperation, idx: usize) {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        if is_read_only == false {
-            while !self.make_pending(op.clone(), idx) {}
-            self.try_combine(idx);
-        } else {
-            self.read_only(op.clone(), idx);
-        }
+        while !self.make_pending(op.clone(), idx) {}
+        self.try_combine(idx);
+    }
+
+    /// Executes an read-only operation against this replica.
+    ///
+    /// `idx` is an identifier for the thread performing the execute operation.
+    ///
+    /// In addition to the supplied operation, this method might execute operations that were
+    /// received on a different replica and appended to the shared log.
+    pub fn execute_ro(&self, op: <D as Dispatch>::ReadOperation, idx: usize) {
+        self.read_only(op.clone(), idx);
     }
 
     /// Appends any pending responses to operations issued by this thread into a passed in
@@ -255,7 +261,7 @@ where
 
         let mut data = self.data.write().unwrap();
 
-        let mut f = |o: <D as Dispatch>::Operation, _i: usize| match data.dispatch_mut(o) {
+        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| match data.dispatch_mut(o) {
             Ok(_) => {}
             Err(_) => error!("Error in operation dispatch"),
         };
@@ -269,7 +275,7 @@ where
 
     /// Syncs up the replica against the underlying log and executes a passed in
     /// closure against all consumed operations.
-    pub fn sync<F: FnMut(<D as Dispatch>::Operation, usize)>(&self, mut d: F) {
+    pub fn sync<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(&self, mut d: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
         while self
@@ -286,7 +292,7 @@ where
     /// Enqueues an operation inside a thread local context. Returns a boolean
     /// indicating whether the operation was enqueued (true) or not (false).
     #[inline(always)]
-    fn make_pending(&self, op: <D as Dispatch>::Operation, idx: usize) -> bool {
+    fn make_pending(&self, op: <D as Dispatch>::WriteOperation, idx: usize) -> bool {
         self.contexts[idx - 1].enqueue(op)
     }
 
@@ -341,7 +347,7 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
-            let f = |o: <D as Dispatch>::Operation, i: usize| {
+            let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 let resp = data.dispatch_mut(o);
                 if i == self.idx {
                     r.push(resp);
@@ -352,7 +358,7 @@ where
 
         // Execute any operations on the shared log against this replica.
 
-        let mut f = |o: <D as Dispatch>::Operation, i: usize| {
+        let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
             let resp = data.dispatch_mut(o);
             if i == self.idx {
                 r.push(resp)
@@ -388,17 +394,21 @@ mod test {
     }
 
     impl Dispatch for Data {
-        type Operation = u64;
+        type ReadOperation = u64;
+        type WriteOperation = u64;
         type Response = u64;
         type ResponseError = ();
 
-        fn dispatch(&self, _op: Self::Operation) -> Result<Self::Response, Self::ResponseError> {
+        fn dispatch(
+            &self,
+            _op: Self::ReadOperation,
+        ) -> Result<Self::Response, Self::ResponseError> {
             Err(())
         }
 
         fn dispatch_mut(
             &mut self,
-            _op: Self::Operation,
+            _op: Self::WriteOperation,
         ) -> Result<Self::Response, Self::ResponseError> {
             self.junk += 1;
             return Ok(107);
@@ -408,7 +418,7 @@ mod test {
     // Tests whether we can construct a Replica given a log.
     #[test]
     fn test_replica_create() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
         assert_eq!(repl.idx, 1);
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
@@ -429,7 +439,7 @@ mod test {
     // Tests whether we can register with this replica and receive an idx.
     #[test]
     fn test_replica_register() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
         assert_eq!(repl.register(), Some(1));
         assert_eq!(repl.next.load(Ordering::SeqCst), 2);
@@ -441,7 +451,7 @@ mod test {
     // Tests whether registering more than the maximum limit of threads per replica is disallowed.
     #[test]
     fn test_replica_register_none() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
         repl.next
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
@@ -451,7 +461,7 @@ mod test {
     // Tests that we can successfully allow operations to go pending on this replica.
     #[test]
     fn test_replica_make_pending() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
         let mut o = vec![];
 
@@ -464,7 +474,7 @@ mod test {
     // Tests that we can't pend operations on a context that is already full of operations.
     #[test]
     fn test_replica_make_pending_false() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
         for _i in 0..Context::<u64, u64, ()>::batch_size() {
             assert!(repl.make_pending(121, 1))
@@ -476,7 +486,7 @@ mod test {
     // Tests that we can append and execute operations using try_combine().
     #[test]
     fn test_replica_try_combine() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::default());
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let _idx = repl.register();
         let mut r = vec![];
@@ -494,7 +504,7 @@ mod test {
     // Tests whether try_combine() also applies pending operations on other threads to the log.
     #[test]
     fn test_replica_try_combine_pending() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::default());
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let mut r = vec![];
 
@@ -511,7 +521,7 @@ mod test {
     // Tests whether try_combine() fails if someone else is currently flat combining.
     #[test]
     fn test_replica_try_combine_fail() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::new(1024));
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
         let mut r = vec![];
 
@@ -528,11 +538,11 @@ mod test {
     // Tests whether we can execute an operation against the log using execute().
     #[test]
     fn test_replica_execute_combine() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::default());
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let _idx = repl.register();
 
-        repl.execute(121, 1, false);
+        repl.execute(121, 1);
 
         assert_eq!(repl.data.read().unwrap().junk, 1);
     }
@@ -541,12 +551,12 @@ mod test {
     // go pending inside the appropriate context.
     #[test]
     fn test_replica_execute_pending() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::default());
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let mut o = vec![];
 
         repl.combiner.store(8, Ordering::SeqCst);
-        repl.execute(121, 1, false);
+        repl.execute(121, 1);
 
         assert_eq!(repl.contexts[0].ops(&mut o), 1);
         assert_eq!(o.len(), 1);
@@ -558,12 +568,12 @@ mod test {
     // against a replica.
     #[test]
     fn test_replica_get_responses() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::default());
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let _idx = repl.register();
         let mut r = vec![];
 
-        repl.execute(121, 1, false);
+        repl.execute(121, 1);
 
         assert_eq!(repl.get_responses(1, &mut r), 1);
         assert_eq!(r.len(), 1);
@@ -574,7 +584,7 @@ mod test {
     // been issued yet.
     #[test]
     fn test_replica_get_responses_none() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::Operation>::default());
+        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let mut r = vec![];
 

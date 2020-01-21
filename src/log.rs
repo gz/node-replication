@@ -818,4 +818,28 @@ mod tests {
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 3);
     }
+
+    #[test]
+    fn test_replica_synced_for_read() {
+        let l = Log::<Operation>::default();
+        let one = l.register().unwrap();
+        let two = l.register().unwrap();
+
+        assert_eq!(one, 1);
+        assert_eq!(two, 2);
+
+        let o = [Operation::Read];
+        let mut f = |op: Operation, i: usize| {
+            assert_eq!(op, Operation::Read);
+            assert_eq!(i, 1);
+        };
+
+        l.append(&o, one, |_o: Operation, _i: usize| {});
+        l.exec(one, &mut f);
+        assert_eq!(l.is_replica_synced_for_reads(one), true);
+        assert_eq!(l.is_replica_synced_for_reads(two), false);
+
+        l.exec(two, &mut f);
+        assert_eq!(l.is_replica_synced_for_reads(two), true);
+    }
 }

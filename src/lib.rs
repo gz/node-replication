@@ -24,10 +24,14 @@ use core::fmt::Debug;
 /// library executes an operation against the data structure, it invokes the `dispatch()`
 /// method with the operation as an argument.
 pub trait Dispatch {
-    type Operation: Sized + Clone + PartialEq + Debug;
+    type ReadOperation: Sized + Clone + PartialEq + Debug;
+    type WriteOperation: Sized + Clone + PartialEq + Debug;
     type Response: Sized + Copy + Default;
     type ResponseError: Sized + Copy + Default;
 
-    fn dispatch(&self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError>;
-    fn dispatch_mut(&mut self, op: Self::Operation) -> Result<Self::Response, Self::ResponseError>;
+    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError>;
+    fn dispatch_mut(
+        &mut self,
+        op: Self::WriteOperation,
+    ) -> Result<Self::Response, Self::ResponseError>;
 }

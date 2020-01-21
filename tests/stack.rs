@@ -151,21 +151,21 @@ fn sequential_test() {
 /// A stack to verify that the log works correctly with multiple threads.
 #[derive(Eq, PartialEq)]
 struct VerifyStack {
-    storage: RefCell<Vec<u32>>,
+    storage: Vec<u32>,
     per_replica_counter: RefCell<HashMap<u16, u16>>,
 }
 
 impl VerifyStack {
-    pub fn push(&self, data: u32) {
-        self.storage.borrow_mut().push(data);
+    pub fn push(&mut self, data: u32) {
+        self.storage.push(data);
     }
 
-    pub fn pop(&self) -> u32 {
-        self.storage.borrow_mut().pop().unwrap()
+    pub fn pop(&mut self) -> u32 {
+        self.storage.pop().unwrap()
     }
 
     pub fn peek(&self) -> u32 {
-        self.storage.borrow().last().unwrap().clone()
+        self.storage.last().unwrap().clone()
     }
 }
 

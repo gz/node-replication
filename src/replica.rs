@@ -35,7 +35,7 @@ const MAX_THREADS_PER_REPLICA: usize = 128;
 /// underlying log.
 pub struct Replica<'a, D>
 where
-    D: Sized + Default + Dispatch,
+    D: Sized + Default + Dispatch + Sync,
 {
     /// A replica-identifier received when the replica is registered against
     /// the shared-log. Required when consuming operations from the log.
@@ -88,11 +88,11 @@ where
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
 /// Contexts are thread-safe.
-unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Default + Dispatch {}
+unsafe impl<'a, D> Sync for Replica<'a, D> where D: Sized + Default + Sync + Dispatch {}
 
 impl<'a, D> core::fmt::Debug for Replica<'a, D>
 where
-    D: Sized + Default + Dispatch,
+    D: Sized + Default + Sync + Dispatch,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "Replica")
@@ -101,7 +101,7 @@ where
 
 impl<'a, D> Replica<'a, D>
 where
-    D: Sized + Default + Dispatch,
+    D: Sized + Default + Dispatch + Sync,
 {
     /// Constructs an instance of a replicated data structure.
     ///

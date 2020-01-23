@@ -6,6 +6,8 @@ use core::mem::transmute;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
 
+use crossbeam_utils::CachePadded;
+
 ///
 const MAX_READER_THREADS: usize = 128;
 
@@ -19,10 +21,10 @@ where
     T: Sized + Default + Sync,
 {
     /// This field is used for the writer lock. There can only be one writer at a time.
-    wlock: AtomicBool,
+    wlock: CachePadded<AtomicBool>,
 
     /// Each reader use different reader lock for accessing the underlying data-structure.
-    rlock: [AtomicUsize; MAX_READER_THREADS],
+    rlock: [CachePadded<AtomicUsize>; MAX_READER_THREADS],
 
     /// This field wraps the underlying data-structure in an `UnsafeCell`.
     data: UnsafeCell<T>,
@@ -52,7 +54,7 @@ where
         use arr_macro::arr;
 
         RwLock {
-            wlock: AtomicBool::new(false),
+            wlock: CachePadded::new(AtomicBool::new(false)),
             rlock: arr![Default::default(); 128],
             data: UnsafeCell::new(T::default()),
         }

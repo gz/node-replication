@@ -7,6 +7,7 @@
 
 extern crate alloc;
 extern crate core;
+extern crate rwlock;
 
 extern crate crossbeam_utils;
 

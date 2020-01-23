@@ -4,7 +4,7 @@
 use core::cell::RefCell;
 use core::mem::transmute;
 use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
-use std::sync::RwLock;
+use rwlock::RwLock;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -77,7 +77,7 @@ where
 
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own.
-    data: RwLock<D>,
+    data: CachePadded<RwLock<D>>,
 
     /// Array that will hold all responses for read-only operations to be appended to a thread
     /// local vector for which the results are obtained on executing them against a replica.
@@ -133,7 +133,7 @@ where
                     >::batch_size(),
             )),
             slog: log.clone(),
-            data: RwLock::new(D::default()),
+            data: CachePadded::new(RwLock::<D>::new()),
             responses: arr![CachePadded::new(Default::default()); 128],
         }
     }
@@ -160,7 +160,7 @@ where
     fn read_only(&self, op: <D as Dispatch>::ReadOperation, tid: usize) {
         loop {
             if self.slog.is_replica_synced_for_reads(self.idx) == true {
-                let data = self.data.read().unwrap();
+                let data = self.data.read(tid - 1);
                 // Execute any operations on the shared log against this replica.
                 let f = |op: <D as Dispatch>::ReadOperation, i: usize| {
                     let resp = data.dispatch(op);
@@ -171,7 +171,7 @@ where
                 // This function only returns when the read-op is completed.
                 return f(op.clone(), self.idx);
             } else {
-                let mut data = self.data.write().unwrap();
+                let mut data = self.data.write();
                 // Reader acquired the writer lock and will try to update the replica.
                 let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                     let resp = data.dispatch_mut(o);
@@ -259,7 +259,7 @@ where
             != 0
         {}
 
-        let mut data = self.data.write().unwrap();
+        let mut data = self.data.write();
 
         let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| match data.dispatch_mut(o) {
             Ok(_) => {}
@@ -328,7 +328,7 @@ where
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
     fn combine(&self) {
-        let mut data = self.data.write().unwrap();
+        let mut data = self.data.write();
 
         let mut b = self.buffer.borrow_mut();
         let mut o = self.inflight.borrow_mut();
@@ -433,7 +433,7 @@ mod test {
             repl.result.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, u64, ()>::batch_size()
         );
-        assert_eq!(repl.data.read().unwrap().junk, 0);
+        assert_eq!(repl.data.read(0).junk, 0);
     }
 
     // Tests whether we can register with this replica and receive an idx.
@@ -496,7 +496,7 @@ mod test {
         repl.contexts[0].res(&mut r);
 
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
-        assert_eq!(repl.data.read().unwrap().junk, 1);
+        assert_eq!(repl.data.read(0).junk, 1);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0], Ok(107));
     }
@@ -513,7 +513,7 @@ mod test {
         repl.try_combine(1);
         repl.contexts[7].res(&mut r);
 
-        assert_eq!(repl.data.read().unwrap().junk, 1);
+        assert_eq!(repl.data.read(0).junk, 1);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0], Ok(107));
     }
@@ -531,7 +531,7 @@ mod test {
         repl.try_combine(1);
         repl.contexts[0].res(&mut r);
 
-        assert_eq!(repl.data.read().unwrap().junk, 0);
+        assert_eq!(repl.data.read(0).junk, 0);
         assert_eq!(r.len(), 0);
     }
 
@@ -544,7 +544,7 @@ mod test {
 
         repl.execute(121, 1);
 
-        assert_eq!(repl.data.read().unwrap().junk, 1);
+        assert_eq!(repl.data.read(0).junk, 1);
     }
 
     // Tests whether calling execute() when there already is a combiner makes the operation
@@ -561,7 +561,7 @@ mod test {
         assert_eq!(repl.contexts[0].ops(&mut o), 1);
         assert_eq!(o.len(), 1);
         assert_eq!(o[0], 121);
-        assert_eq!(repl.data.read().unwrap().junk, 0);
+        assert_eq!(repl.data.read(0).junk, 0);
     }
 
     // Tests whether get_responses() retrieves responses to an operation that was executed

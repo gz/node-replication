@@ -34,6 +34,7 @@ harness = false
 crossbeam-utils = { version = "0.6", default-features = false }
 arr_macro = "0.1.2"
 log = "0.4"
+rwlock = {path = "./utils/rwlock"}
 
 # Add debug symbols on the release build so that we can debug performance issues
 [profile.release]

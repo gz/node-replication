@@ -71,12 +71,12 @@ where
 
             // Wait for all the reader to exit before returning.
             loop {
-                if self
+                let mut sum = 0;
+                let _ = self
                     .rlock
                     .iter()
-                    .all(|item| *(transmute::<&AtomicUsize, &usize>(item)) == 0)
-                    == false
-                {
+                    .map(|item| sum += *(transmute::<&AtomicUsize, &usize>(item)));
+                if sum != 0 {
                     spin_loop_hint();
                     continue;
                 }

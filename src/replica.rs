@@ -328,8 +328,6 @@ where
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
     fn combine(&self) {
-        let mut data = self.data.write();
-
         let mut b = self.buffer.borrow_mut();
         let mut o = self.inflight.borrow_mut();
         let mut r = self.result.borrow_mut();
@@ -348,7 +346,7 @@ where
         // in here because operations on the log might need to be consumed for GC.
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = data.dispatch_mut(o);
+                let resp = self.data.write().dispatch_mut(o);
                 if i == self.idx {
                     r.push(resp);
                 }
@@ -357,7 +355,7 @@ where
         }
 
         // Execute any operations on the shared log against this replica.
-
+        let mut data = self.data.write();
         let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
             let resp = data.dispatch_mut(o);
             if i == self.idx {

@@ -7,7 +7,6 @@
 
 extern crate alloc;
 extern crate core;
-extern crate rwlock;
 
 extern crate crossbeam_utils;
 
@@ -15,6 +14,7 @@ extern crate crossbeam_utils;
 extern crate log as logging;
 
 mod context;
+pub mod rwlock;
 
 pub mod log;
 pub mod replica;

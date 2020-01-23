@@ -4,7 +4,6 @@
 use core::cell::RefCell;
 use core::mem::transmute;
 use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
-use rwlock::RwLock;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -13,6 +12,7 @@ use crossbeam_utils::CachePadded;
 
 use super::context::Context;
 use super::log::Log;
+use super::rwlock::RwLock;
 use super::Dispatch;
 
 /// The maximum number of threads that can be registered with a replica. If more than

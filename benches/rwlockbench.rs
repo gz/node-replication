@@ -1,16 +1,16 @@
 extern crate clap;
+extern crate node_replication;
 extern crate rand;
-extern crate rwlock;
-
-use clap::{crate_version, value_t, App, Arg};
-use rwlock::RwLock;
-
-use rand::RngCore;
 
 use std::sync::Arc;
 use std::sync::RwLock as StdLock;
 use std::thread;
 use std::time;
+
+use clap::{crate_version, value_t, App, Arg};
+use rand::RngCore;
+
+use node_replication::rwlock::RwLock;
 
 fn main() {
     let args = std::env::args().filter(|e| e != "--bench");
@@ -81,7 +81,7 @@ fn main() {
     }
 
     if versions.contains(&"rwlock") {
-        let map = Arc::new(rwlock::RwLock::<usize>::new());
+        let map = Arc::new(RwLock::<usize>::new());
         let start = time::Instant::now();
         let end = start + dur;
         join.extend((0..readers).into_iter().map(|tid| {

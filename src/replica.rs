@@ -172,6 +172,11 @@ where
                 return f(op.clone(), self.idx);
             } else {
                 let mut data = self.data.write();
+                // Continue if the replica is synced by the combiner when
+                // this thread was waiting to acquire the write lock.
+                if self.slog.is_replica_synced_for_reads(self.idx) == true {
+                    continue;
+                }
                 // Reader acquired the writer lock and will try to update the replica.
                 let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                     let resp = data.dispatch_mut(o);

@@ -21,7 +21,6 @@ pub mod replica;
 
 use core::fmt::Debug;
 
-
 #[derive(Debug, Clone)]
 pub enum Operation<R: Sized + Clone + PartialEq + Debug, W: Sized + Clone + PartialEq + Debug> {
     ReadOperation(R),

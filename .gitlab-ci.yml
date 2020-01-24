@@ -59,12 +59,12 @@ deploy:
     # Copy hashbench results
     - mkdir -p gh-pages/hashbench/$GIT_REV_CURRENT
     - cp results.log write-throughput.png read-throughput.png gh-pages/hashbench/$GIT_REV_CURRENT
-    - cd gh-pages
-    - cp hashbench/index.markdown hashbench/$GIT_REV_CURRENT
     # Copy rwlockbench results
     - mkdir -p gh-pages/rwlockbench/$GIT_REV_CURRENT
     - cp rwlockbench_results.log rwlock-write-throughput.png rwlock-read-throughput.png gh-pages/rwlockbench/$GIT_REV_CURRENT
+    # Setup gh-pages layout
     - cd gh-pages
+    - cp hashbench/index.markdown hashbench/$GIT_REV_CURRENT
     - cp rwlockbench/index.markdown rwlockbench/$GIT_REV_CURRENT
     # Make CI plots
     - pip3 install -r requirements.txt

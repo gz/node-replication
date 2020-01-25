@@ -230,10 +230,30 @@ impl Dispatch for VerifyStack {
     fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
         match op {
             OpRd::Peek => {
-                self.peek();
+                let ele: u32 = self.peek();
+                let tid = (ele & 0xffff) as u16;
+                let val = ((ele >> 16) & 0xffff) as u16;
+                //println!("Peek tid {} val {}", tid, val);
+
+                let last_popped = self
+                    .per_replica_counter
+                    .get(&tid)
+                    .unwrap_or(&u16::max_value());
+
+                // Reading already popped element.
+                if *last_popped <= val {
+                    println!(
+                        "assert violation last_popped={} val={} tid={} {:?}",
+                        *last_popped, val, tid, self.per_replica_counter
+                    );
+                }
+                assert!(
+                    *last_popped > val,
+                    "Elements that came from a given thread are monotonically decreasing"
+                );
+                return Ok(Some(ele));
             }
         }
-        Ok(None)
     }
 
     fn dispatch_mut(
@@ -246,6 +266,7 @@ impl Dispatch for VerifyStack {
                 let _val = ((v >> 16) & 0xffff) as u16;
                 //println!("Push tid {} val {}", tid, val);
                 self.push(v);
+                return Ok(Some(v));
             }
             OpWr::Pop => {
                 let ele: u32 = self.pop();
@@ -276,10 +297,9 @@ impl Dispatch for VerifyStack {
                     // println!("per_replica_counter ={:?}", per_replica_counter);
                     assert_eq!(self.per_replica_counter.len(), 8, "Popped a final element from a thread before seeing elements from every thread.");
                 }
+                return Ok(Some(ele));
             }
         }
-
-        return Ok(None);
     }
 }
 

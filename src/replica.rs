@@ -175,7 +175,15 @@ where
                 // Continue if the replica is synced by the combiner when
                 // this thread was waiting to acquire the write lock.
                 if self.slog.is_replica_synced_for_reads(self.idx) == true {
-                    continue;
+                    // Execute any operations on the shared log against this replica.
+                    let f = |op: <D as Dispatch>::ReadOperation, i: usize| {
+                        let resp = data.dispatch(op);
+                        if i == self.idx {
+                            self.responses[tid - 1].borrow_mut().push(resp);
+                        }
+                    };
+                    // This function only returns when the read-op is completed.
+                    return f(op.clone(), self.idx);
                 }
                 // Reader acquired the writer lock and will try to update the replica.
                 let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
@@ -333,6 +341,7 @@ where
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
     fn combine(&self) {
+        let mut data = self.data.write();
         let mut b = self.buffer.borrow_mut();
         let mut o = self.inflight.borrow_mut();
         let mut r = self.result.borrow_mut();
@@ -351,7 +360,7 @@ where
         // in here because operations on the log might need to be consumed for GC.
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = self.data.write().dispatch_mut(o);
+                let resp = data.dispatch_mut(o);
                 if i == self.idx {
                     r.push(resp);
                 }
@@ -360,7 +369,6 @@ where
         }
 
         // Execute any operations on the shared log against this replica.
-        let mut data = self.data.write();
         let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
             let resp = data.dispatch_mut(o);
             if i == self.idx {

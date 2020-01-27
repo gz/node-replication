@@ -68,23 +68,21 @@ where
             // Acquire the writer lock.
             while self.wlock.compare_and_swap(false, true, Ordering::Acquire) != false {
                 spin_loop_hint();
-                continue;
             }
 
             // Wait for all the reader to exit before returning.
             loop {
-                let mut sum = 0;
-                let _ = self
+                let sum: usize = self
                     .rlock
                     .iter()
-                    .map(|item| sum += *(transmute::<&AtomicUsize, &usize>(item)));
+                    .map(|item| item.load(Ordering::Relaxed))
+                    .sum();
                 if sum != 0 {
                     spin_loop_hint();
                     continue;
                 }
-                break;
+                return WriteGuard::new(self);
             }
-            return WriteGuard::new(self);
         }
     }
 
@@ -101,7 +99,7 @@ where
                     continue;
                 }
 
-                self.rlock[tid].fetch_add(1, Ordering::Acquire);
+                self.rlock[tid].fetch_add(1, Ordering::SeqCst);
                 match self.wlock.load(Ordering::Relaxed) {
                     false => return ReadGuard::new(self, tid),
                     true => {
@@ -114,12 +112,16 @@ where
 
     /// Private function to unlock the writelock; called through drop() function.
     unsafe fn write_unlock(&self) {
-        self.wlock.compare_and_swap(true, false, Ordering::Acquire);
+        if self.wlock.compare_and_swap(true, false, Ordering::Acquire) != true {
+            panic!("write_unlock() is called without acquiring the write lock");
+        }
     }
 
     /// Private function to unlock the readlock; called through the drop() function.
     unsafe fn read_unlock(&self, tid: usize) {
-        self.rlock[tid].fetch_sub(1, Ordering::Release);
+        if self.rlock[tid].fetch_sub(1, Ordering::Release) == 0 {
+            panic!("read_unlock() is called without acquiring the read lock");
+        }
     }
 }
 
@@ -322,5 +324,21 @@ mod tests {
                 .join()
                 .expect("Readers didn't finish successfully.");
         }
+    }
+
+    /// This test checks that write_unlock() shouldn't be called without acquiring the write lock.
+    #[test]
+    #[should_panic]
+    fn test_writer_unlock_without_lock() {
+        let lock = RwLock::<usize>::new();
+        unsafe { lock.write_unlock() };
+    }
+
+    /// This test checks that read_unlock() shouldn't be called without acquiring the read lock.
+    #[test]
+    #[should_panic]
+    fn test_reader_unlock_without_lock() {
+        let lock = RwLock::<usize>::new();
+        unsafe { lock.read_unlock(1) };
     }
 }

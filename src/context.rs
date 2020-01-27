@@ -27,8 +27,8 @@ const MAX_PENDING_OPS: usize = 32;
 pub struct Context<T, R, E>
 where
     T: Sized + Clone,
-    R: Sized + Copy + Default,
-    E: Sized + Copy + Default,
+    R: Sized + Clone + Default,
+    E: Sized + Clone + Default,
 {
     /// Array that will hold all pending operations to be appended to the shared log as
     /// well as the results obtained on executing them against a replica.
@@ -52,8 +52,8 @@ where
 impl<T, R, E> Default for Context<T, R, E>
 where
     T: Sized + Clone,
-    R: Sized + Copy + Default,
-    E: Sized + Copy + Default,
+    R: Sized + Clone + Default,
+    E: Sized + Clone + Default,
 {
     /// Default constructor for the context.
     fn default() -> Context<T, R, E> {
@@ -75,8 +75,8 @@ where
 impl<T, R, E> Context<T, R, E>
 where
     T: Sized + Clone,
-    R: Sized + Copy + Default,
-    E: Sized + Copy + Default,
+    R: Sized + Clone + Default,
+    E: Sized + Clone + Default,
 {
     /// Enqueues an operation onto this context's batch of pending operations.
     ///
@@ -120,7 +120,7 @@ where
         for i in 0..n {
             let e = self.batch[self.index(h + i)].as_ptr();
             unsafe {
-                (*e).1 = responses[i];
+                (*e).1 = responses[i].clone();
             }
         }
 

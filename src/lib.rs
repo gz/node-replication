@@ -33,8 +33,8 @@ pub enum Operation<R: Sized + Clone + PartialEq + Debug, W: Sized + Clone + Part
 pub trait Dispatch {
     type ReadOperation: Sized + Clone + PartialEq + Debug;
     type WriteOperation: Sized + Clone + PartialEq + Debug;
-    type Response: Sized + Copy + Default;
-    type ResponseError: Sized + Copy + Default;
+    type Response: Sized + Clone + Default;
+    type ResponseError: Sized + Clone + Default;
 
     fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError>;
     fn dispatch_mut(

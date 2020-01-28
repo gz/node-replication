@@ -72,12 +72,11 @@ where
 
             // Wait for all the reader to exit before returning.
             loop {
-                let sum: usize = self
+                let is_all_zero = self
                     .rlock
                     .iter()
-                    .map(|item| item.load(Ordering::Relaxed))
-                    .sum();
-                if sum != 0 {
+                    .all(|item| item.load(Ordering::Relaxed) == 0);
+                if is_all_zero == false {
                     spin_loop_hint();
                     continue;
                 }

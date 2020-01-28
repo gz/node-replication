@@ -158,7 +158,12 @@ where
     }
 
     fn read_only(&self, op: <D as Dispatch>::ReadOperation, tid: usize) {
+        let mut iter = 0;
+        let interval = 1 << 12;
+
         loop {
+            iter += 1;
+
             if self.slog.is_replica_synced_for_reads(self.idx) == true {
                 let data = self.data.read(tid - 1);
                 // Execute any operations on the shared log against this replica.
@@ -171,11 +176,15 @@ where
                 // This function only returns when the read-op is completed.
                 return f(op.clone(), self.idx);
             } else {
+                if iter < interval {
+                    continue;
+                }
+
+                // Try updating the replica only when there is no active combiner.
                 let mut data = self.data.write();
                 // Continue if the replica is synced by the combiner when
                 // this thread was waiting to acquire the write lock.
                 if self.slog.is_replica_synced_for_reads(self.idx) == true {
-                    // Execute any operations on the shared log against this replica.
                     let f = |op: <D as Dispatch>::ReadOperation, i: usize| {
                         let resp = data.dispatch(op);
                         if i == self.idx {
@@ -185,15 +194,43 @@ where
                     // This function only returns when the read-op is completed.
                     return f(op.clone(), self.idx);
                 }
+
                 // Reader acquired the writer lock and will try to update the replica.
+                let mut r = self.result.borrow_mut();
+                let mut o = self.inflight.borrow_mut();
+
+                r.clear();
+
                 let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                     let resp = data.dispatch_mut(o);
                     if i == self.idx {
-                        self.responses[tid - 1].borrow_mut().push(resp);
+                        r.push(resp);
                     }
                 };
                 // Update the local replica till readTail.
                 self.slog.exec_read_tail(self.idx, &mut f);
+
+                // Return/Enqueue responses back into the appropriate thread context(s).
+                let n = self.next.load(Ordering::Relaxed);
+                let mut resps = r.len();
+                let (mut s, mut f) = (0, 0);
+
+                for i in 1..n {
+                    if resps == 0 {
+                        break;
+                    }
+
+                    if o[i - 1] == 0 {
+                        continue;
+                    };
+
+                    let min = core::cmp::min(o[i - 1], resps);
+                    resps -= min;
+                    f += min;
+                    self.contexts[i - 1].enqueue_resps(&r[s..f]);
+                    s += min;
+                    o[i - 1] -= min;
+                }
             }
         }
     }

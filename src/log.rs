@@ -373,7 +373,7 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { ((*e).alivef != self.lmasks[idx - 1].get()) } {
+            while unsafe { (*e).alivef != self.lmasks[idx - 1].get() } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "{:?} alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",

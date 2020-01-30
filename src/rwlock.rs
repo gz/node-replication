@@ -344,4 +344,70 @@ mod tests {
         let lock = RwLock::<usize>::new();
         unsafe { lock.read_unlock(1) };
     }
+
+    /// Second lock operation in this test would block indefinitely, and the main thread
+    /// should panic after some time. The main thread won't panic if somehow there is a way
+    /// such that one writer followed by a reader are in the critical section.
+    #[test]
+    #[should_panic(expected = "This test should always panic")]
+    fn test_reader_after_writer() {
+        let lock = RwLock::<usize>::new();
+        let shared = Arc::new(std::sync::RwLock::new(0));
+
+        let shared1 = shared.clone();
+        let lock_thread = thread::spawn(move || {
+            drop((lock.write(1), lock.read(0)));
+            *shared1.write().unwrap() = 1;
+        });
+
+        thread::sleep(std::time::Duration::from_secs(2));
+        if *shared.read().unwrap() == 0 {
+            panic!("This test should always panic");
+        }
+        lock_thread.join().unwrap();
+    }
+
+    /// Second lock operation in this test would block indefinitely, and the main thread
+    /// should panic after some time. The main thread won't panic if somehow there is a way
+    /// such that one reader followed by a writer are in the critical section.
+    #[test]
+    #[should_panic(expected = "This test should always panic")]
+    fn test_writer_after_reader() {
+        let lock = RwLock::<usize>::new();
+        let shared = Arc::new(std::sync::RwLock::new(0));
+
+        let shared1 = shared.clone();
+        let lock_thread = thread::spawn(move || {
+            drop((lock.read(0), lock.write(1)));
+            *shared1.write().unwrap() = 1;
+        });
+
+        thread::sleep(std::time::Duration::from_secs(2));
+        if *shared.read().unwrap() == 0 {
+            panic!("This test should always panic");
+        }
+        lock_thread.join().unwrap();
+    }
+
+    /// Second lock operation in this test would block indefinitely, and the main thread
+    /// should panic after some time. The main thread won't panic if somehow there is a way
+    /// such that one writer followed by a writer are in the critical section.
+    #[test]
+    #[should_panic(expected = "This test should always panic")]
+    fn test_writer_after_writer() {
+        let lock = RwLock::<usize>::new();
+        let shared = Arc::new(std::sync::RwLock::new(0));
+
+        let shared1 = shared.clone();
+        let lock_thread = thread::spawn(move || {
+            drop((lock.write(0), lock.write(0)));
+            *shared1.write().unwrap() = 1;
+        });
+
+        thread::sleep(std::time::Duration::from_secs(2));
+        if *shared.read().unwrap() == 0 {
+            panic!("This test should always panic");
+        }
+        lock_thread.join().unwrap();
+    }
 }

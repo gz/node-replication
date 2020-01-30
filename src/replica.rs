@@ -250,7 +250,7 @@ where
             != 0
         {}
 
-        let mut data = self.data.write();
+        let mut data = self.data.write(self.next.load(Ordering::Relaxed));
 
         let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| match data.dispatch_mut(o) {
             Ok(_) => {}
@@ -337,7 +337,7 @@ where
         // in here because operations on the log might need to be consumed for GC.
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = self.data.write().dispatch_mut(o);
+                let resp = self.data.write(n).dispatch_mut(o);
                 if i == self.idx {
                     r.push(resp);
                 }
@@ -347,7 +347,7 @@ where
 
         // Execute any operations on the shared log against this replica.
         {
-            let mut data = self.data.write();
+            let mut data = self.data.write(n);
             let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 let resp = data.dispatch_mut(o);
                 if i == self.idx {

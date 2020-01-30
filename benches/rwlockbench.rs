@@ -86,11 +86,11 @@ fn main() {
         let end = start + dur;
         join.extend((0..readers).into_iter().map(|tid| {
             let map = map.clone();
-            thread::spawn(move || run_rwlock(map, end, false, tid))
+            thread::spawn(move || run_rwlock(map, end, false, tid, readers))
         }));
         join.extend((0..writers).into_iter().map(|tid| {
             let map = map.clone();
-            thread::spawn(move || run_rwlock(map, end, true, tid))
+            thread::spawn(move || run_rwlock(map, end, true, tid, readers))
         }));
         let (wres, rres): (Vec<_>, _) = join
             .drain(..)
@@ -123,13 +123,14 @@ fn run_rwlock(
     end: time::Instant,
     write: bool,
     tid: usize,
+    readers: usize,
 ) -> (bool, usize) {
     let mut ops = 0;
     let mut t_rng = rand::thread_rng();
 
     while time::Instant::now() < end {
         if write {
-            let mut ele = lock.write();
+            let mut ele = lock.write(readers);
             *ele = t_rng.next_u64() as usize;
         } else {
             let ele = lock.read(tid);

@@ -63,7 +63,10 @@ where
     /// Lock the underlying data-structure in write mode. The application can get a mutable
     /// reference from `WriteGuard`. Only one writer should succeed in acquiring this type
     /// of lock.
-    pub fn write(&self) -> WriteGuard<T> {
+    ///
+    /// `n` is the number of active readers for the replica and we only check read-lock for
+    /// only `n` threads before acquiring the write-lock.
+    pub fn write(&self, n: usize) -> WriteGuard<T> {
         unsafe {
             // Acquire the writer lock.
             while self.wlock.compare_and_swap(false, true, Ordering::Acquire) != false {
@@ -75,6 +78,7 @@ where
                 let is_all_zero = self
                     .rlock
                     .iter()
+                    .take(n)
                     .all(|item| item.load(Ordering::Relaxed) == 0);
                 if is_all_zero == false {
                     spin_loop_hint();
@@ -203,10 +207,10 @@ mod tests {
         let lock = RwLock::<usize>::new();
         let val = 10;
         {
-            let mut a = lock.write();
+            let mut a = lock.write(1);
             *a = val;
         }
-        assert_eq!(*lock.write(), val);
+        assert_eq!(*lock.write(1), val);
     }
 
     /// This test checks if write-lock is dropped once the variable goes out of the scope.
@@ -215,7 +219,7 @@ mod tests {
         let lock = RwLock::<usize>::new();
         let val = 10;
         {
-            let mut a = lock.write();
+            let mut a = lock.write(1);
             *a = val;
         }
         assert_eq!(*lock.read(1), val);
@@ -227,9 +231,9 @@ mod tests {
     fn test_different_lock_combinations() {
         let l = RwLock::<usize>::new();
         drop(l.read(1));
-        drop(l.write());
+        drop(l.write(1));
         drop((l.read(1), l.read(2)));
-        drop(l.write());
+        drop(l.write(1));
     }
 
     /// This test checks that the writes to the underlying data-structure are atomic.
@@ -242,7 +246,7 @@ mod tests {
         for _i in 0..t {
             let l = lock.clone();
             let child = thread::spawn(move || {
-                let mut ele = l.write();
+                let mut ele = l.write(t);
                 *ele += 1;
             });
             threads.push(child);
@@ -268,7 +272,7 @@ mod tests {
         for _i in 0..t {
             let l = lock.clone();
             let child = thread::spawn(move || {
-                let mut ele = l.write();
+                let mut ele = l.write(t);
                 *ele += 1;
             });
             threads.push(child);

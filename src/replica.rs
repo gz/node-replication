@@ -162,14 +162,8 @@ where
             if self.slog.is_replica_synced_for_reads(self.idx) == true {
                 let data = self.data.read(tid - 1);
                 // Execute any operations on the shared log against this replica.
-                let f = |op: <D as Dispatch>::ReadOperation, i: usize| {
-                    let resp = data.dispatch(op);
-                    if i == self.idx {
-                        self.responses[tid - 1].borrow_mut().push(resp);
-                    }
-                };
-                // This function only returns when the read-op is completed.
-                return f(op.clone(), self.idx);
+                let resp = data.dispatch(op);
+                return self.responses[tid - 1].borrow_mut().push(resp);
             } else {
                 self.try_combine(tid);
             }

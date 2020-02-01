@@ -114,14 +114,14 @@ where
     }
 
     /// Private function to unlock the writelock; called through drop() function.
-    unsafe fn write_unlock(&self) {
+    pub(in crate::rwlock) unsafe fn write_unlock(&self) {
         if self.wlock.compare_and_swap(true, false, Ordering::Acquire) != true {
             panic!("write_unlock() is called without acquiring the write lock");
         }
     }
 
     /// Private function to unlock the readlock; called through the drop() function.
-    unsafe fn read_unlock(&self, tid: usize) {
+    pub(in crate::rwlock) unsafe fn read_unlock(&self, tid: usize) {
         if self.rlock[tid].fetch_sub(1, Ordering::Release) == 0 {
             panic!("read_unlock() is called without acquiring the read lock");
         }

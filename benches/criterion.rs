@@ -247,8 +247,9 @@ fn log_scale_bench(c: &mut Criterion) {
             c,
             "log-append",
             |_cid, rid, log, _replica, ops, batch_size| {
+                let mut op_batch: Vec<usize> = Vec::with_capacity(8);
                 for batch_op in ops.rchunks(batch_size) {
-                    let mut op_batch: Vec<usize> = Vec::with_capacity(8);
+                    op_batch.clear();
                     for op in batch_op {
                         match op {
                             Operation::WriteOperation(o) => op_batch.push(*o),

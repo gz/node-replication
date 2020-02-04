@@ -10,7 +10,7 @@ extern crate criterion;
 extern crate log;
 extern crate zipf;
 
-use node_replication::{Dispatch, Operation};
+use node_replication::Dispatch;
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
 use zipf::ZipfDistribution;
@@ -22,6 +22,8 @@ mod hashmap;
 mod nop;
 mod stack;
 mod synthetic;
+
+use utils::Operation;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 

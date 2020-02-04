@@ -14,11 +14,13 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 
-use node_replication::{Dispatch, Operation};
+use node_replication::Dispatch;
 
 mod mkbench;
 mod os_workload;
 mod utils;
+
+use utils::Operation;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use mkbench::{ReplicaStrategy, ThreadMapping};

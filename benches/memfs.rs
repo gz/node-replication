@@ -11,9 +11,10 @@ mod utils;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use log::warn;
-use node_replication::{Dispatch, Operation};
+use node_replication::Dispatch;
 
 use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
+use utils::Operation;
 
 /// All FS operations we can perform through the log.
 #[derive(Debug, PartialEq, Clone, Copy)]

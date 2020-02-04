@@ -81,7 +81,7 @@ fn main() {
     }
 
     if versions.contains(&"rwlock") {
-        let map = Arc::new(RwLock::<usize>::new());
+        let map = Arc::new(RwLock::<usize>::default());
         let start = time::Instant::now();
         let end = start + dur;
         join.extend((0..readers).into_iter().map(|tid| {

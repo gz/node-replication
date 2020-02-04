@@ -21,12 +21,6 @@ pub mod replica;
 
 use core::fmt::Debug;
 
-#[derive(Debug, Clone)]
-pub enum Operation<R: Sized + Clone + PartialEq + Debug, W: Sized + Clone + PartialEq + Debug> {
-    ReadOperation(R),
-    WriteOperation(W),
-}
-
 /// Trait that a data structure must implement to be usable with this library. When this
 /// library executes an operation against the data structure, it invokes the `dispatch()`
 /// method with the operation as an argument.

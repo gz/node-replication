@@ -11,7 +11,9 @@ use rand::seq::SliceRandom;
 use rand::{thread_rng, RngCore};
 use zipf::ZipfDistribution;
 
-use node_replication::{Dispatch, Operation};
+use node_replication::Dispatch;
+
+use crate::utils::Operation;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]

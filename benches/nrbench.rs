@@ -16,7 +16,7 @@ mod utils;
 
 use clap::{load_yaml, App};
 use mkbench::{ReplicaStrategy, ThreadMapping};
-use node_replication::Operation;
+use utils::Operation;
 
 enum Builder {
     Stack(mkbench::ScaleBenchBuilder<stack::Stack>),

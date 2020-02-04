@@ -14,7 +14,9 @@ use std::cell::RefCell;
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
-use node_replication::{Dispatch, Operation};
+use node_replication::Dispatch;
+
+use crate::utils::Operation;
 
 /// Operations we can perform on the AbstractDataStructure.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]

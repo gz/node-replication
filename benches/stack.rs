@@ -3,9 +3,13 @@
 
 //! Defines a stack data-structure that can be replicated.
 
-use node_replication::{Dispatch, Operation};
-use rand::{thread_rng, Rng};
 use std::cell::RefCell;
+
+use rand::{thread_rng, Rng};
+
+use node_replication::Dispatch;
+
+use crate::utils::Operation;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]

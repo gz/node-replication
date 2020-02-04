@@ -20,10 +20,11 @@ use std::time::{Duration, Instant};
 
 use criterion::{black_box, BenchmarkId, Criterion, Throughput};
 use log::*;
-use node_replication::{log::Log, replica::Replica, Dispatch, Operation};
+use node_replication::{log::Log, replica::Replica, Dispatch};
 
 use crate::utils;
 use crate::utils::topology::*;
+use crate::utils::Operation;
 
 pub use crate::utils::topology::ThreadMapping;
 

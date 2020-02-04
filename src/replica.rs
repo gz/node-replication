@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
-use core::mem::transmute;
 use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
@@ -22,6 +21,10 @@ use super::Dispatch;
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
 /// have to adjust the `64` literals in the `new` constructor of `Replica`.
 const MAX_THREADS_PER_REPLICA: usize = 128;
+
+/// The responses for a thread are enqueued in a vector (that is accessed through a RefCell).
+type ThreadResponseStorage<D> =
+    RefCell<Vec<Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>>>;
 
 /// An instance of a replicated data structure. Uses a shared log to scale operations on
 /// the data structure across cores and processors.
@@ -81,9 +84,7 @@ where
 
     /// Array that will hold all responses for read-only operations to be appended to a thread
     /// local vector for which the results are obtained on executing them against a replica.
-    responses: [CachePadded<
-        RefCell<Vec<Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>>>,
-    >; MAX_THREADS_PER_REPLICA],
+    responses: [CachePadded<ThreadResponseStorage<D>>; MAX_THREADS_PER_REPLICA],
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -133,7 +134,7 @@ where
                     >::batch_size(),
             )),
             slog: log.clone(),
-            data: CachePadded::new(RwLock::<D>::new()),
+            data: CachePadded::new(RwLock::<D>::default()),
             responses: arr![CachePadded::new(Default::default()); 128],
         }
     }
@@ -159,7 +160,7 @@ where
 
     fn read_only(&self, op: <D as Dispatch>::ReadOperation, tid: usize) {
         loop {
-            if self.slog.is_replica_synced_for_reads(self.idx) == true {
+            if self.slog.is_replica_synced_for_reads(self.idx) {
                 let data = self.data.read(tid - 1);
                 // Execute any operations on the shared log against this replica.
                 let resp = data.dispatch(op);
@@ -189,7 +190,7 @@ where
     /// In addition to the supplied operation, this method might execute operations that were
     /// received on a different replica and appended to the shared log.
     pub fn execute_ro(&self, op: <D as Dispatch>::ReadOperation, idx: usize) {
-        self.read_only(op.clone(), idx);
+        self.read_only(op, idx);
     }
 
     /// Appends any pending responses to operations issued by this thread into a passed in
@@ -288,7 +289,11 @@ where
         // then try to acquire the combiner lock. If there is, then just return.
         let mut combine = 0;
         for _i in 0..4 {
-            combine += unsafe { transmute::<&AtomicUsize, &usize>(&self.combiner) }
+            combine += unsafe {
+                &*(&self.combiner
+                    as *const crossbeam_utils::CachePadded<std::sync::atomic::AtomicUsize>
+                    as *const usize)
+            };
         }
 
         if combine != 0 {
@@ -313,39 +318,39 @@ where
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
     fn combine(&self) {
-        let mut b = self.buffer.borrow_mut();
-        let mut o = self.inflight.borrow_mut();
-        let mut r = self.result.borrow_mut();
+        let mut buffer = self.buffer.borrow_mut();
+        let mut operations = self.inflight.borrow_mut();
+        let mut results = self.result.borrow_mut();
 
-        b.clear();
-        r.clear();
+        buffer.clear();
+        results.clear();
 
-        let n = self.next.load(Ordering::Relaxed);
+        let next = self.next.load(Ordering::Relaxed);
 
         // Collect operations from each thread registered with this replica.
-        for i in 1..n {
-            o[i - 1] = self.contexts[i - 1].ops(&mut b);
+        for i in 1..next {
+            operations[i - 1] = self.contexts[i - 1].ops(&mut buffer);
         }
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = self.data.write(n).dispatch_mut(o);
+                let resp = self.data.write(next).dispatch_mut(o);
                 if i == self.idx {
-                    r.push(resp);
+                    results.push(resp);
                 }
             };
-            self.slog.append(&b, self.idx, f);
+            self.slog.append(&buffer, self.idx, f);
         }
 
         // Execute any operations on the shared log against this replica.
         {
-            let mut data = self.data.write(n);
+            let mut data = self.data.write(next);
             let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 let resp = data.dispatch_mut(o);
                 if i == self.idx {
-                    r.push(resp)
+                    results.push(resp)
                 };
             };
             self.slog.exec(self.idx, &mut f);
@@ -353,15 +358,15 @@ where
 
         // Return/Enqueue responses back into the appropriate thread context(s).
         let (mut s, mut f) = (0, 0);
-        for i in 1..n {
-            if o[i - 1] == 0 {
+        for i in 1..next {
+            if operations[i - 1] == 0 {
                 continue;
             };
 
-            f += o[i - 1];
-            self.contexts[i - 1].enqueue_resps(&r[s..f]);
-            s += o[i - 1];
-            o[i - 1] = 0;
+            f += operations[i - 1];
+            self.contexts[i - 1].enqueue_resps(&results[s..f]);
+            s += operations[i - 1];
+            operations[i - 1] = 0;
         }
     }
 }

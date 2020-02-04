@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::UnsafeCell;
-use core::mem::transmute;
+use core::default::Default;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
-///
+/// Maximum amount of reader (threads) that this lock supports.
 const MAX_READER_THREADS: usize = 128;
 
 /// The struct declares a Reader-writer lock. The reader-writer lock implementation is
@@ -45,12 +45,12 @@ pub struct WriteGuard<'a, T: ?Sized + Default + Sync + 'a> {
     lock: &'a RwLock<T>,
 }
 
-impl<T> RwLock<T>
+impl<T> Default for RwLock<T>
 where
     T: Sized + Default + Sync,
 {
     /// Create a new instance of a RwLock.
-    pub fn new() -> RwLock<T> {
+    fn default() -> RwLock<T> {
         use arr_macro::arr;
 
         RwLock {
@@ -59,7 +59,12 @@ where
             data: UnsafeCell::new(T::default()),
         }
     }
+}
 
+impl<T> RwLock<T>
+where
+    T: Sized + Default + Sync,
+{
     /// Lock the underlying data-structure in write mode. The application can get a mutable
     /// reference from `WriteGuard`. Only one writer should succeed in acquiring this type
     /// of lock.
@@ -69,7 +74,7 @@ where
     pub fn write(&self, n: usize) -> WriteGuard<T> {
         unsafe {
             // Acquire the writer lock.
-            while self.wlock.compare_and_swap(false, true, Ordering::Acquire) != false {
+            while self.wlock.compare_and_swap(false, true, Ordering::Acquire) {
                 spin_loop_hint();
             }
 
@@ -80,7 +85,7 @@ where
                     .iter()
                     .take(n)
                     .all(|item| item.load(Ordering::Relaxed) == 0);
-                if is_all_zero == false {
+                if !is_all_zero {
                     spin_loop_hint();
                     continue;
                 }
@@ -94,20 +99,23 @@ where
     pub fn read(&self, tid: usize) -> ReadGuard<T> {
         unsafe {
             loop {
-                // Since we check the writer-lock again after acquiring read-lock,
-                // we can use transmute here.
-                if *(transmute::<&AtomicBool, &bool>(&self.wlock)) == true {
+                // Since the next check is merely a performance enhancement and we acquire the
+                // writer-lock again after acquiring read-lock, we can read `wlock` without forcing
+                // the atomic load.
+                let write_lock_ptr = &*(&self.wlock
+                    as *const crossbeam_utils::CachePadded<std::sync::atomic::AtomicBool>
+                    as *const bool);
+                if *write_lock_ptr {
                     // Spin when there is an active writer.
                     spin_loop_hint();
                     continue;
                 }
 
                 self.rlock[tid].fetch_add(1, Ordering::SeqCst);
-                match self.wlock.load(Ordering::Relaxed) {
-                    false => return ReadGuard::new(self, tid),
-                    true => {
-                        self.rlock[tid].fetch_sub(1, Ordering::Release);
-                    }
+                if self.wlock.load(Ordering::Relaxed) {
+                    self.rlock[tid].fetch_sub(1, Ordering::Release);
+                } else {
+                    return ReadGuard::new(self, tid);
                 }
             }
         }
@@ -115,7 +123,7 @@ where
 
     /// Private function to unlock the writelock; called through drop() function.
     pub(in crate::rwlock) unsafe fn write_unlock(&self) {
-        if self.wlock.compare_and_swap(true, false, Ordering::Acquire) != true {
+        if !self.wlock.compare_and_swap(true, false, Ordering::Acquire) {
             panic!("write_unlock() is called without acquiring the write lock");
         }
     }
@@ -130,16 +138,13 @@ where
 
 impl<'rwlock, T: ?Sized + Default + Sync> ReadGuard<'rwlock, T> {
     unsafe fn new(lock: &'rwlock RwLock<T>, tid: usize) -> ReadGuard<'rwlock, T> {
-        ReadGuard {
-            tid: tid,
-            lock: lock,
-        }
+        ReadGuard { tid, lock }
     }
 }
 
 impl<'rwlock, T: ?Sized + Default + Sync> WriteGuard<'rwlock, T> {
     unsafe fn new(lock: &'rwlock RwLock<T>) -> WriteGuard<'rwlock, T> {
-        WriteGuard { lock: lock }
+        WriteGuard { lock }
     }
 }
 
@@ -204,7 +209,7 @@ mod tests {
     /// This test checks if write-lock can return an mutable reference for a data-structure.
     #[test]
     fn test_writer_lock() {
-        let lock = RwLock::<usize>::new();
+        let lock = RwLock::<usize>::default();
         let val = 10;
         {
             let mut a = lock.write(1);
@@ -216,7 +221,7 @@ mod tests {
     /// This test checks if write-lock is dropped once the variable goes out of the scope.
     #[test]
     fn test_reader_lock() {
-        let lock = RwLock::<usize>::new();
+        let lock = RwLock::<usize>::default();
         let val = 10;
         {
             let mut a = lock.write(1);
@@ -229,7 +234,7 @@ mod tests {
     /// application if the scope of a writer doesn't interfere with the readers.
     #[test]
     fn test_different_lock_combinations() {
-        let l = RwLock::<usize>::new();
+        let l = RwLock::<usize>::default();
         drop(l.read(1));
         drop(l.write(1));
         drop((l.read(1), l.read(2)));
@@ -239,7 +244,7 @@ mod tests {
     /// This test checks that the writes to the underlying data-structure are atomic.
     #[test]
     fn test_parallel_writer_sequential_writer() {
-        let lock = Arc::new(RwLock::<usize>::new());
+        let lock = Arc::new(RwLock::<usize>::default());
         let t = 100;
 
         let mut threads = Vec::new();
@@ -265,7 +270,7 @@ mod tests {
     /// This test checks that the multiple readers can work in parallel.
     #[test]
     fn test_parallel_writer_readers() {
-        let lock = Arc::new(RwLock::<usize>::new());
+        let lock = Arc::new(RwLock::<usize>::default());
         let t = 100;
 
         let mut threads = Vec::new();
@@ -307,7 +312,7 @@ mod tests {
     /// This test checks that the multiple readers can work in parallel in a single thread.
     #[test]
     fn test_parallel_readers_single_thread() {
-        let lock = Arc::new(RwLock::<usize>::new());
+        let lock = Arc::new(RwLock::<usize>::default());
         let t = 100;
 
         let mut threads = Vec::new();
@@ -333,7 +338,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_writer_unlock_without_lock() {
-        let lock = RwLock::<usize>::new();
+        let lock = RwLock::<usize>::default();
         unsafe { lock.write_unlock() };
     }
 
@@ -341,7 +346,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_reader_unlock_without_lock() {
-        let lock = RwLock::<usize>::new();
+        let lock = RwLock::<usize>::default();
         unsafe { lock.read_unlock(1) };
     }
 
@@ -351,7 +356,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "This test should always panic")]
     fn test_reader_after_writer() {
-        let lock = RwLock::<usize>::new();
+        let lock = RwLock::<usize>::default();
         let shared = Arc::new(std::sync::RwLock::new(0));
 
         let shared1 = shared.clone();
@@ -373,7 +378,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "This test should always panic")]
     fn test_writer_after_reader() {
-        let lock = RwLock::<usize>::new();
+        let lock = RwLock::<usize>::default();
         let shared = Arc::new(std::sync::RwLock::new(0));
 
         let shared1 = shared.clone();
@@ -395,7 +400,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "This test should always panic")]
     fn test_writer_after_writer() {
-        let lock = RwLock::<usize>::new();
+        let lock = RwLock::<usize>::default();
         let shared = Arc::new(std::sync::RwLock::new(0));
 
         let shared1 = shared.clone();

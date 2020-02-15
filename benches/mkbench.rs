@@ -383,7 +383,10 @@ where
                                 }
 
                                 // Consume the log but we don't apply operations anymore
-                                replica.sync(|_o: <T as Dispatch>::WriteOperation, _r: usize| {});
+                                replica.sync(
+                                    core_id as usize,
+                                    |_o: <T as Dispatch>::WriteOperation, _r: usize| {},
+                                );
                             }
                         }
 

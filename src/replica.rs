@@ -27,6 +27,10 @@ const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
 
+/// Number of samples taken for measure the stalls at combiner lock or log-tail increment.
+#[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
+const STALL_COUNTS: usize = 10_000_000;
+
 /// An instance of a replicated data structure. Uses a shared log to scale operations on
 /// the data structure across cores and processors.
 ///
@@ -88,7 +92,7 @@ where
     data: CachePadded<RwLock<D>>,
 
     /// Stores the stall cycles when different threads are run simultenously.
-    #[cfg(feature = "stall")]
+    #[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
     stall: CachePadded<RefCell<Vec<u64>>>,
 }
 
@@ -193,8 +197,8 @@ where
                 )),
                 slog: log.clone(),
                 data: CachePadded::new(RwLock::<D>::default()),
-                #[cfg(feature = "stall")]
-                stall: CachePadded::new(RefCell::new(Vec::with_capacity(10_000_000))),
+                #[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
+                stall: CachePadded::new(RefCell::new(Vec::with_capacity(STALL_COUNTS))),
             });
 
             let mut replica = uninit_replica.assume_init();
@@ -489,7 +493,7 @@ where
     fn try_combine(&self, tid: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
-        #[cfg(feature = "stall")]
+        #[cfg(feature = "combiner-stall")]
         let start = unsafe { x86::time::rdtsc() };
         let mut combine = 0;
         for _i in 0..4 {
@@ -509,8 +513,8 @@ where
             spin_loop_hint();
             return;
         }
-        #[cfg(feature = "stall")]
-        if self.stall.borrow().len() < 10_000_000 {
+        #[cfg(feature = "combiner-stall")]
+        if self.stall.borrow().len() < STALL_COUNTS {
             let diff = unsafe { x86::time::rdtsc() } - start;
             self.stall.borrow_mut().push(diff);
         }
@@ -550,7 +554,11 @@ where
                     results.push(resp);
                 }
             };
-            self.slog.append(&buffer, self.idx, f);
+            let _cas_time = self.slog.append(&buffer, self.idx, f);
+            #[cfg(feature = "log-stall")]
+            if self.stall.borrow().len() < STALL_COUNTS {
+                self.stall.borrow_mut().push(_cas_time);
+            }
         }
 
         // Execute any operations on the shared log against this replica.
@@ -580,7 +588,7 @@ where
     }
 }
 
-#[cfg(feature = "stall")]
+#[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
 impl<'a, D> Drop for Replica<'a, D>
 where
     D: Sized + Default + Sync + Dispatch,

@@ -323,7 +323,7 @@ where
     /// GC, this closure is passed into exec() to ensure that this replica does'nt
     /// cause a deadlock.
     #[inline(always)]
-    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
+    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) -> u64 {
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
@@ -371,6 +371,8 @@ where
 
             // Try reserving slots for the operations. If that fails, then restart
             // from the beginning of this loop.
+            #[cfg(feature = "log-stall")]
+            let start = unsafe { x86::time::rdtsc() };
             if self
                 .tail
                 .compare_and_swap(tail, tail + nops, Ordering::SeqCst)
@@ -378,6 +380,8 @@ where
             {
                 continue;
             };
+            #[cfg(feature = "log-stall")]
+            let stop = unsafe { x86::time::rdtsc() };
 
             // Successfully reserved entries on the shared log. Add the operations in.
             for i in 0..nops {
@@ -403,7 +407,10 @@ where
                 self.advance_head(idx, &mut s);
             }
 
-            return;
+            #[cfg(feature = "log-stall")]
+            return stop - start;
+            #[cfg(not(feature = "log-stall"))]
+            return 0;
         }
     }
 

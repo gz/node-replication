@@ -89,7 +89,7 @@ where
 
     /// Stores the stall cycles when different threads are run simultenously.
     #[cfg(feature = "stall")]
-    stall: RefCell<Vec<u64>>,
+    stall: CachePadded<RefCell<Vec<u64>>>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -194,7 +194,7 @@ where
                 slog: log.clone(),
                 data: CachePadded::new(RwLock::<D>::default()),
                 #[cfg(feature = "stall")]
-                stall: RefCell::new(Vec::with_capacity(10_000_000)),
+                stall: CachePadded::new(RefCell::new(Vec::with_capacity(10_000_000))),
             });
 
             let mut replica = uninit_replica.assume_init();
@@ -511,9 +511,8 @@ where
         }
         #[cfg(feature = "stall")]
         if self.stall.borrow().len() < 10_000_000 {
-            self.stall
-                .borrow_mut()
-                .push(unsafe { x86::time::rdtsc() } - start);
+            let diff = unsafe { x86::time::rdtsc() } - start;
+            self.stall.borrow_mut().push(diff);
         }
 
         // Successfully became the combiner; perform one round of flat combining.
@@ -595,8 +594,11 @@ where
             let tail = self.stall.borrow()[(len * 99) / 100];
 
             info!(
-                "Min(cycles): {} Median(cycles): {} Tail(cycles): {}",
-                min, median, tail
+                "Cores: {}, Min(cycles): {}, Median(cycles): {}, Tail(cycles): {}",
+                self.next.load(Ordering::Relaxed) - 1,
+                min,
+                median,
+                tail
             );
         } else {
             info!("Invalid length");

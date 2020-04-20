@@ -86,6 +86,10 @@ where
     /// The underlying replicated data structure. Shared between threads registered
     /// with this replica. Each replica maintains its own.
     data: CachePadded<RwLock<D>>,
+
+    /// Stores the stall cycles when different threads are run simultenously.
+    #[cfg(feature = "stall")]
+    stall: RefCell<Vec<u64>>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -189,6 +193,8 @@ where
                 )),
                 slog: log.clone(),
                 data: CachePadded::new(RwLock::<D>::default()),
+                #[cfg(feature = "stall")]
+                stall: RefCell::new(Vec::with_capacity(10_000_000)),
             });
 
             let mut replica = uninit_replica.assume_init();
@@ -483,6 +489,8 @@ where
     fn try_combine(&self, tid: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
+        #[cfg(feature = "stall")]
+        let start = unsafe { x86::time::rdtsc() };
         let mut combine = 0;
         for _i in 0..4 {
             combine += unsafe {
@@ -500,6 +508,12 @@ where
         if self.combiner.compare_and_swap(0, tid, Ordering::Acquire) != 0 {
             spin_loop_hint();
             return;
+        }
+        #[cfg(feature = "stall")]
+        if self.stall.borrow().len() < 10_000_000 {
+            self.stall
+                .borrow_mut()
+                .push(unsafe { x86::time::rdtsc() } - start);
         }
 
         // Successfully became the combiner; perform one round of flat combining.
@@ -563,6 +577,29 @@ where
             self.contexts[i - 1].enqueue_resps(&results[s..f]);
             s += operations[i - 1];
             operations[i - 1] = 0;
+        }
+    }
+}
+
+#[cfg(feature = "stall")]
+impl<'a, D> Drop for Replica<'a, D>
+where
+    D: Sized + Default + Sync + Dispatch,
+{
+    fn drop(&mut self) {
+        self.stall.borrow_mut().sort();
+        let len = self.stall.borrow().len();
+        if len > 0 {
+            let min = self.stall.borrow()[0];
+            let median = self.stall.borrow()[len / 2];
+            let tail = self.stall.borrow()[(len * 99) / 100];
+
+            info!(
+                "Min(cycles): {} Median(cycles): {} Tail(cycles): {}",
+                min, median, tail
+            );
+        } else {
+            info!("Invalid length");
         }
     }
 }

@@ -960,6 +960,10 @@ where
         let mut group = c.benchmark_group(name);
         for rs in self.replica_strategies.iter() {
             for tm in self.thread_mappings.iter() {
+                #[cfg(feature = "combiner-stall")]
+                info!("Combiner-stall: {} {:?} {:?}", name, rs, tm);
+                #[cfg(feature = "log-stall")]
+                info!("Log-stall: {} {:?} {:?}", name, rs, tm);
                 for ts in self.threads.iter() {
                     for b in self.batches.iter() {
                         let log =

@@ -217,7 +217,7 @@ fn main() {
     let mut harness = Default::default();
     let write_ratios = vec![10, 50, 100];
 
-    hashmap_single_threaded(&mut harness);
+    //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         hashmap_scale_out(&mut harness, write_ratio);
         //partitioned_hashmap_scale_out(&mut harness, write_ratio);

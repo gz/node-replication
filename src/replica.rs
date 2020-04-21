@@ -599,7 +599,7 @@ where
         if len > 0 {
             let min = self.stall.borrow()[0];
             let median = self.stall.borrow()[len / 2];
-            let tail = self.stall.borrow()[(len * 99) / 100];
+            let tail = self.stall.borrow()[(len * 98) / 100];
 
             info!(
                 "Cores: {}, Min(cycles): {}, Median(cycles): {}, Tail(cycles): {}",

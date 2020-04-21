@@ -215,11 +215,11 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, write_ratio: usize) {
 fn main() {
     let _r = env_logger::try_init();
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 50, 100];
+    let write_ratios = vec![10, 50, 100];
 
     hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         hashmap_scale_out(&mut harness, write_ratio);
-        partitioned_hashmap_scale_out(&mut harness, write_ratio);
+        //partitioned_hashmap_scale_out(&mut harness, write_ratio);
     }
 }

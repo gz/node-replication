@@ -23,6 +23,7 @@ extern crate log as logging;
 extern crate static_assertions;
 
 mod context;
+pub mod qlock;
 pub mod rwlock;
 
 pub mod log;

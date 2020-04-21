@@ -4,9 +4,11 @@
 use core::cell::UnsafeCell;
 use core::default::Default;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
+
+use super::qlock::QLock;
 
 /// Maximum number of reader threads that this lock supports.
 const MAX_READER_THREADS: usize = 128;
@@ -25,7 +27,8 @@ where
     T: Sized + Default + Sync,
 {
     /// The writer lock. There can be at most one writer at any given point of time.
-    wlock: CachePadded<AtomicBool>,
+    // wlock: CachePadded<AtomicBool>,
+    wlock: CachePadded<QLock>,
 
     /// Each reader use an individual lock to access the underlying data-structure.
     rlock: [CachePadded<AtomicUsize>; MAX_READER_THREADS],
@@ -62,7 +65,7 @@ where
         use arr_macro::arr;
 
         RwLock {
-            wlock: CachePadded::new(AtomicBool::new(false)),
+            wlock: CachePadded::new(QLock::new()),
             rlock: arr![Default::default(); 128],
             data: UnsafeCell::new(T::default()),
         }
@@ -94,10 +97,7 @@ where
     ///     *w_guard = 777;
     /// ```
     pub fn write(&self, n: usize) -> WriteGuard<T> {
-        // First, wait until we can acquire the writer lock.
-        while self.wlock.compare_and_swap(false, true, Ordering::Acquire) {
-            spin_loop_hint();
-        }
+        self.wlock.lock();
 
         // Next, wait until all readers have released their locks. This condition
         // evaluates to true if each reader lock is free (i.e equal to zero).
@@ -131,18 +131,10 @@ where
     ///     let r_guard = lock.read(MY_THREAD_ID);
     ///     assert_eq!(0, *r_guard);
     pub fn read(&self, tid: usize) -> ReadGuard<T> {
-        // We perform a small optimization. Before attempting to acquire a read lock, we issue
-        // naked reads to the write lock and wait until it is free. For that, we retrieve a
-        // raw pointer to the write lock over here.
-        let ptr = unsafe {
-            &*(&self.wlock as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicBool>
-                as *const bool)
-        };
-
         loop {
-            // First, wait until the write lock is free. This is the small
-            // optimization spoken of earlier.
-            while *ptr {
+            // Wait until the lock is freed. This optimization
+            // does not work all the time.
+            while self.wlock.is_locked() {
                 spin_loop_hint();
             }
 
@@ -151,7 +143,7 @@ where
             // see this acquired read lock and block. If it isn't free, then we got unlucky;
             // release the read lock and retry.
             self.rlock[tid].fetch_add(1, Ordering::SeqCst);
-            if !self.wlock.load(Ordering::Relaxed) {
+            if !self.wlock.is_locked() {
                 break;
             }
 
@@ -163,9 +155,7 @@ where
 
     /// Unlocks the write lock; invoked by the drop() method.
     pub(in crate::rwlock) unsafe fn write_unlock(&self) {
-        if !self.wlock.compare_and_swap(true, false, Ordering::Acquire) {
-            panic!("write_unlock() called without acquiring the write lock");
-        }
+        self.wlock.unlock();
     }
 
     /// Unlocks the read lock; called by the drop() method.
@@ -257,7 +247,7 @@ mod tests {
     fn test_rwlock_default() {
         let lock = RwLock::<usize>::default();
 
-        assert_eq!(lock.wlock.load(Ordering::Relaxed), false);
+        assert_eq!(lock.wlock.is_locked(), false);
         for idx in 0..MAX_READER_THREADS {
             assert_eq!(lock.rlock[idx].load(Ordering::Relaxed), 0);
         }
@@ -274,7 +264,7 @@ mod tests {
         let mut guard = lock.write(1);
         *guard = val;
 
-        assert_eq!(lock.wlock.load(Ordering::Relaxed), true);
+        assert_eq!(lock.wlock.is_locked(), true);
         assert_eq!(lock.rlock[0].load(Ordering::Relaxed), 0);
         assert_eq!(unsafe { *lock.data.get() }, val);
     }
@@ -286,10 +276,10 @@ mod tests {
 
         {
             let mut _guard = lock.write(1);
-            assert_eq!(lock.wlock.load(Ordering::Relaxed), true);
+            assert_eq!(lock.wlock.is_locked(), true);
         }
 
-        assert_eq!(lock.wlock.load(Ordering::Relaxed), false);
+        assert_eq!(lock.wlock.is_locked(), false);
     }
 
     // Tests if the immutable reference returned on acquiring a read lock
@@ -304,7 +294,7 @@ mod tests {
         }
         let guard = lock.read(0);
 
-        assert_eq!(lock.wlock.load(Ordering::Relaxed), false);
+        assert_eq!(lock.wlock.is_locked(), false);
         assert_eq!(lock.rlock[0].load(Ordering::Relaxed), 1);
         assert_eq!(*guard, val);
     }

@@ -23,9 +23,9 @@ test:
 bench:
   stage: bench
   script:
-    RUST_TEST_THREADS=1 RUST_LOG=info cargo bench --bench hashmap
-    RUST_TEST_THREADS=1 RUST_LOG=info cargo bench --bench hashmap --features combiner-stall | grep "INFO" | tee -a stall.csv
-    RUST_TEST_THREADS=1 RUST_LOG=info cargo bench --bench hashmap --features log-stall | grep "INFO" | tee -a stall.csv
+    - RUST_TEST_THREADS=1 RUST_LOG=info cargo bench --bench hashmap
+    - RUST_TEST_THREADS=1 RUST_LOG=info cargo bench --bench hashmap --features combiner-stall | grep "INFO" | tee -a stall.csv
+    - RUST_TEST_THREADS=1 RUST_LOG=info cargo bench --bench hashmap --features log-stall | grep "INFO" | tee -a stall.csv
   dependencies:
     - test
   variables:

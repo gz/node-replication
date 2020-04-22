@@ -49,20 +49,7 @@ impl QLock {
 
     /// Locks the underlying data structure using mutual exclusion.
     ///
-    /// # Example
-    ///
-    /// ```
-    ///     use node_replication::qlock::QLock;
-    ///
-    ///     // Create the lock.
-    ///     let lock = QLock::<usize>::default();
-    ///
-    ///     // Acquire the lock. This returns a guard that can be
-    ///     // used to modify the protected data.
-    ///     let mut w_guard = lock.write();
-    ///     *w_guard = 777;
-    /// ```
-    /// #[inline(always)]
+    // #[inline(always)]
     pub fn lock(&self) {
         // Fast path: Try to steal the write lock
         if self

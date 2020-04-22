@@ -71,7 +71,9 @@ impl QLock {
             if !prev.is_null() {
                 let prev = unsafe { &*prev };
                 (*prev).next.store(&mut qnode, Ordering::Relaxed);
-                while !qnode.status.load(Ordering::Acquire) {}
+                while !qnode.status.load(Ordering::Acquire) {
+                    spin_loop_hint();
+                }
             }
 
             // Now the waiter is the at the head of the queue, so
@@ -104,6 +106,8 @@ impl QLock {
                     while next.is_null() {
                         next = qnode.next.load(Ordering::Acquire);
                     }
+                    let next = unsafe { &*next };
+                    (*next).status.store(true, Ordering::Relaxed);
                 }
             } else {
                 let next = unsafe { &*next };

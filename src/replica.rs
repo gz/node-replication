@@ -602,7 +602,8 @@ where
             let tail = self.stall.borrow()[(len * 98) / 100];
 
             info!(
-                "Cores: {}, Min(cycles): {}, Median(cycles): {}, Tail(cycles): {}",
+                "Replica {} Threads {}, Min(cycles): {}, Median(cycles): {}, Tail(cycles): {}",
+                self.idx,
                 self.next.load(Ordering::Relaxed) - 1,
                 min,
                 median,

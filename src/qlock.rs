@@ -52,7 +52,7 @@ impl QLock {
     /// # Example
     ///
     /// ```
-    ///     use node_replication::lock::QLock;
+    ///     use node_replication::qlock::QLock;
     ///
     ///     // Create the lock.
     ///     let lock = QLock::<usize>::default();

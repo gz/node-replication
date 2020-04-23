@@ -59,11 +59,9 @@ where
     /// Returns a new instance of a RwLock. Default constructs the
     /// underlying data structure.
     fn default() -> RwLock<T> {
-        use arr_macro::arr;
-
         RwLock {
             wlock: CachePadded::new(AtomicBool::new(false)),
-            rlock: arr![Default::default(); 128],
+            rlock: array_init::array_init(|_i| Default::default()),
             data: UnsafeCell::new(T::default()),
         }
     }

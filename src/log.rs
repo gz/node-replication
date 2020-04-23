@@ -169,8 +169,6 @@ where
     /// This method also allocates memory for the log upfront. No further allocations
     /// will be performed once this method returns.
     pub fn new<'b>(bytes: usize) -> Log<'b, T> {
-        use arr_macro::arr;
-
         // Calculate the number of entries that will go into the log, and retrieve a
         // slice to it from the allocated region of memory.
         let mut num = bytes / Log::<T>::entry_size();
@@ -214,7 +212,8 @@ where
             }
         }
 
-        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = arr![Default::default(); 64];
+        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] =
+            array_init::array_init(|_i| Default::default());
         for idx in 0..MAX_REPLICAS {
             fls[idx].set(true)
         }
@@ -227,7 +226,7 @@ where
             head: CachePadded::new(AtomicUsize::new(0usize)),
             tail: CachePadded::new(AtomicUsize::new(0usize)),
             ctail: CachePadded::new(AtomicUsize::new(0usize)),
-            ltails: arr![Default::default(); 64],
+            ltails: array_init::array_init(|_i| Default::default()),
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
         }

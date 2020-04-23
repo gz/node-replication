@@ -36,8 +36,6 @@ use crate::utils::Operation;
 
 pub use crate::utils::topology::ThreadMapping;
 
-use arr_macro::arr;
-
 /// Threshold after how many iterations we log a warning for busy spinning loops.
 ///
 /// This helps with debugging to figure out where things may end up blocking.
@@ -515,7 +513,9 @@ where
         // Need a barrier to synchronize starting of threads
         let barrier = Arc::new(Barrier::new(thread_num));
 
-        let complete = Arc::new(arr![AtomicUsize::default(); 128]);
+        let complete: Arc<[AtomicUsize; 128]> =
+            Arc::new(array_init::array_init(|_i| AtomicUsize::default()));
+
         let mut replicas: Vec<Arc<Replica<T>>> = Vec::with_capacity(self.replicas());
         self.alloc_replicas(&mut replicas);
         let do_sync = self.sync;

@@ -8,7 +8,6 @@ use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use arr_macro::arr;
 use crossbeam_utils::CachePadded;
 
 use super::context::Context;
@@ -57,13 +56,11 @@ where
     /// cannot perform flat combining (because another thread might be doing so).
     ///
     /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
-    contexts: Vec<
-        Context<
-            <D as Dispatch>::WriteOperation,
-            <D as Dispatch>::Response,
-            <D as Dispatch>::ResponseError,
-        >,
-    >,
+    contexts: [Context<
+        <D as Dispatch>::WriteOperation,
+        <D as Dispatch>::Response,
+        <D as Dispatch>::ResponseError,
+    >; MAX_THREADS_PER_REPLICA],
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
@@ -169,7 +166,7 @@ where
                 idx: log.register().unwrap(),
                 combiner: CachePadded::new(AtomicUsize::new(0)),
                 next: CachePadded::new(AtomicUsize::new(1)),
-                contexts: Vec::with_capacity(128),
+                contexts: array_init::array_init(|_i| Default::default()),
                 buffer: RefCell::new(Vec::with_capacity(
                     MAX_THREADS_PER_REPLICA
                         * Context::<
@@ -178,7 +175,7 @@ where
                             <D as Dispatch>::ResponseError,
                         >::batch_size(),
                 )),
-                inflight: RefCell::new(arr![Default::default(); 128]),
+                inflight: RefCell::new(array_init::array_init(|_i| Default::default())),
                 result: RefCell::new(Vec::with_capacity(
                     MAX_THREADS_PER_REPLICA
                         * Context::<
@@ -190,17 +187,7 @@ where
                 slog: log.clone(),
                 data: CachePadded::new(RwLock::<D>::default()),
             });
-
-            let mut replica = uninit_replica.assume_init();
-            // Add `MAX_THREADS_PER_REPLICA` contexts
-            for _idx in 0..128 {
-                Arc::get_mut(&mut replica)
-                    .unwrap()
-                    .contexts
-                    .push(Default::default());
-            }
-
-            replica
+            uninit_replica.assume_init()
         }
     }
 

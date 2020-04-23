@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
-use core::mem::MaybeUninit;
 use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
@@ -156,39 +155,33 @@ where
     /// let replica = Replica::<Data>::new(&log);
     /// ```
     pub fn new<'b>(log: &Arc<Log<'b, <D as Dispatch>::WriteOperation>>) -> Arc<Replica<'b, D>> {
-        let mut uninit_replica: Arc<MaybeUninit<Replica<D>>> = Arc::new_zeroed();
+        let replica = box Replica {
+            idx: log.register().unwrap(),
+            combiner: CachePadded::new(AtomicUsize::new(0)),
+            next: CachePadded::new(AtomicUsize::new(1)),
+            contexts: array_init::array_init(|_i| Default::default()),
+            buffer: RefCell::new(Vec::with_capacity(
+                MAX_THREADS_PER_REPLICA
+                    * Context::<
+                        <D as Dispatch>::WriteOperation,
+                        <D as Dispatch>::Response,
+                        <D as Dispatch>::ResponseError,
+                    >::batch_size(),
+            )),
+            inflight: RefCell::new(array_init::array_init(|_i| Default::default())),
+            result: RefCell::new(Vec::with_capacity(
+                MAX_THREADS_PER_REPLICA
+                    * Context::<
+                        <D as Dispatch>::WriteOperation,
+                        <D as Dispatch>::Response,
+                        <D as Dispatch>::ResponseError,
+                    >::batch_size(),
+            )),
+            slog: log.clone(),
+            data: CachePadded::new(RwLock::<D>::default()),
+        };
 
-        // This is the preferred but unsafe mode of initialization as it avoids
-        // putting the (often big) Replica object on the stack first.
-        unsafe {
-            let uninit_ptr = Arc::get_mut_unchecked(&mut uninit_replica).as_mut_ptr();
-            uninit_ptr.write(Replica {
-                idx: log.register().unwrap(),
-                combiner: CachePadded::new(AtomicUsize::new(0)),
-                next: CachePadded::new(AtomicUsize::new(1)),
-                contexts: array_init::array_init(|_i| Default::default()),
-                buffer: RefCell::new(Vec::with_capacity(
-                    MAX_THREADS_PER_REPLICA
-                        * Context::<
-                            <D as Dispatch>::WriteOperation,
-                            <D as Dispatch>::Response,
-                            <D as Dispatch>::ResponseError,
-                        >::batch_size(),
-                )),
-                inflight: RefCell::new(array_init::array_init(|_i| Default::default())),
-                result: RefCell::new(Vec::with_capacity(
-                    MAX_THREADS_PER_REPLICA
-                        * Context::<
-                            <D as Dispatch>::WriteOperation,
-                            <D as Dispatch>::Response,
-                            <D as Dispatch>::ResponseError,
-                        >::batch_size(),
-                )),
-                slog: log.clone(),
-                data: CachePadded::new(RwLock::<D>::default()),
-            });
-            uninit_replica.assume_init()
-        }
+        Arc::from(replica)
     }
 
     /// Registers a thread with this replica. Returns an idx inside an Option if the registration

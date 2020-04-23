@@ -18,8 +18,9 @@ use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// The default size of the shared log in bytes. If constructed using the
 /// default constructor, the log will be these many bytes in size. Currently
-/// set to 1 GB based on the ASPLOS 2017 paper.
-const DEFAULT_LOG_BYTES: usize = 1024 * 1024 * 1024;
+/// set to 32 MiB (original ASPLOS paper used 1 GiB but this quickly leads
+/// to excessive memory consumption e.g., during cargo test).
+const DEFAULT_LOG_BYTES: usize = 32 * 1024 * 1024;
 const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES - 1) == 0));
 
 /// The maximum number of replicas that can be used against the log.

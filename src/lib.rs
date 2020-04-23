@@ -7,6 +7,7 @@
 #![feature(core_intrinsics)]
 #![feature(new_uninit)]
 #![feature(get_mut_unchecked)]
+#![feature(box_syntax)]
 
 #[cfg(test)]
 extern crate std;

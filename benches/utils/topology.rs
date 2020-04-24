@@ -204,8 +204,30 @@ impl MachineTopology {
                         a.cpu.partial_cmp(&b.cpu).unwrap()
                     }
                 });
-                let c = cpus.iter().take(how_many).map(|c| *c).collect();
-                c
+                // Checking if logical threads are adjacent
+                if how_many > 1 && cpus[0].core == cpus[1].core {
+                    // Split the cpus list into two and then add them
+                    let mut c1: Vec<_> = cpus
+                        .iter()
+                        .enumerate()
+                        .filter(|&(i, _)| i % 2 == 0)
+                        .map(|(_, elm)| *elm)
+                        .collect();
+
+                    let mut c2: Vec<_> = cpus
+                        .iter()
+                        .enumerate()
+                        .filter(|&(i, _)| i % 2 != 0)
+                        .map(|(_, elm)| *elm)
+                        .collect();
+
+                    c1.append(&mut c2);
+                    let c = c1.iter().take(how_many).map(|c| *c).collect();
+                    c
+                } else {
+                    let c = cpus.iter().take(how_many).map(|c| *c).collect();
+                    c
+                }
             }
         }
     }

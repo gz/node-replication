@@ -31,16 +31,16 @@ extern crate jemallocator;
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// The initial amount of entries all Hashmaps are initialized with
-pub const INITIAL_CAPACITY: usize = 160_000_000;
+pub const INITIAL_CAPACITY: usize = 50_000_000;
 
 // Biggest key in the hash-map
-pub const KEY_SPACE: usize = 160_000_000;
+pub const KEY_SPACE: usize = 50_000_000;
 
 // Key distribution for all hash-maps [uniform|skewed]
 pub const UNIFORM: &'static str = "uniform";
 
 // Number of operation for test-harness.
-pub const NOP: usize = 80_000_000;
+pub const NOP: usize = 50_000_000;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -319,14 +319,14 @@ fn main() {
         urcu_sys::rcu_init();
     }
 
-    hashmap_single_threaded(&mut harness);
+    //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
         partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
-        concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
-        concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
-        concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
-        concurrent_ds_scale_out::<RcuHashMap>(&mut harness, "urcu", write_ratio);
-        concurrent_ds_scale_out::<DashWrapper>(&mut harness, "dashmap", write_ratio);
+        //concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
+        //concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
+        //concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
+        //concurrent_ds_scale_out::<RcuHashMap>(&mut harness, "urcu", write_ratio);
+        //concurrent_ds_scale_out::<DashWrapper>(&mut harness, "dashmap", write_ratio);
     }
 }

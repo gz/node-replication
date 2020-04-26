@@ -31,16 +31,16 @@ extern crate jemallocator;
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// The initial amount of entries all Hashmaps are initialized with
-pub const INITIAL_CAPACITY: usize = 50_000_000;
+pub const INITIAL_CAPACITY: usize = 100_000_000;
 
 // Biggest key in the hash-map
-pub const KEY_SPACE: usize = 50_000_000;
+pub const KEY_SPACE: usize = 100_000_000;
 
 // Key distribution for all hash-maps [uniform|skewed]
 pub const UNIFORM: &'static str = "uniform";
 
 // Number of operation for test-harness.
-pub const NOP: usize = 50_000_000;
+pub const NOP: usize = 100_000_000;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]

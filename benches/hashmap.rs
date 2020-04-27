@@ -19,6 +19,7 @@ mod hashmap_comparisons;
 mod mkbench;
 mod utils;
 
+use crossbeam_utils::CachePadded;
 use hashmap_comparisons::*;
 use mkbench::ReplicaTrait;
 use utils::benchmark::*;
@@ -31,16 +32,16 @@ extern crate jemallocator;
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// The initial amount of entries all Hashmaps are initialized with
-pub const INITIAL_CAPACITY: usize = 100_000_000;
+pub const INITIAL_CAPACITY: usize = 50_000_000;
 
 // Biggest key in the hash-map
-pub const KEY_SPACE: usize = 100_000_000;
+pub const KEY_SPACE: usize = 50_000_000;
 
 // Key distribution for all hash-maps [uniform|skewed]
 pub const UNIFORM: &'static str = "uniform";
 
 // Number of operation for test-harness.
-pub const NOP: usize = 100_000_000;
+pub const NOP: usize = 50_000_000;
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -70,16 +71,16 @@ pub enum OpConcurrent {
 /// We just use a vector.
 #[derive(Debug, Clone)]
 pub struct NrHashMap {
-    storage: HashMap<u64, u64>,
+    storage: HashMap<u64, CachePadded<u64>>,
 }
 
 impl NrHashMap {
     pub fn put(&mut self, key: u64, val: u64) {
-        self.storage.insert(key, val);
+        self.storage.insert(key, CachePadded::new(val));
     }
 
     pub fn get(&self, key: u64) -> Option<u64> {
-        self.storage.get(&key).map(|v| *v)
+        self.storage.get(&key).map(|v| **v)
     }
 }
 
@@ -88,7 +89,7 @@ impl Default for NrHashMap {
     fn default() -> NrHashMap {
         let mut storage = HashMap::with_capacity(INITIAL_CAPACITY);
         for i in 0..INITIAL_CAPACITY {
-            storage.insert(i as u64, (i + 1) as u64);
+            storage.insert(i as u64, CachePadded::new((i + 1) as u64));
         }
         NrHashMap { storage }
     }

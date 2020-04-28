@@ -4,12 +4,16 @@
 //! Defines a hash-map that can be replicated.
 #![feature(test)]
 
+use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::Sync;
 
+use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
-use rand::{distributions::Distribution, Rng, RngCore};
+use rand::{distributions::Distribution, Rng, RngCore, SeedableRng};
+
+use lazy_static::lazy_static;
 use zipf::ZipfDistribution;
 
 use node_replication::replica::Replica;
@@ -42,6 +46,14 @@ pub const UNIFORM: &'static str = "uniform";
 
 // Number of operation for test-harness.
 pub const NOP: usize = 50_000_000;
+
+// Rng Seed
+pub const RNG_SEED: u64 = 0xdead_beef_beef_dead;
+
+lazy_static! {
+    /// Use same seed for all hashmaps
+    static ref HASHMAP_SEED: RandomState = RandomState::new();
+}
 
 /// Operations we can perform on the stack.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -80,15 +92,14 @@ impl NrHashMap {
     }
 
     pub fn get(&self, key: u64) -> Option<u64> {
-        //self.storage.get(&key).map(|v| **v)
-        std::hint::black_box(Some(42))
+        self.storage.get(&key).map(|v| *v)
     }
 }
 
 impl Default for NrHashMap {
     /// Return a dummy hash-map with `INITIAL_CAPACITY` elements.
     fn default() -> NrHashMap {
-        let mut storage = HashMap::with_capacity(INITIAL_CAPACITY);
+        let mut storage = HashMap::with_capacity_and_hasher(INITIAL_CAPACITY, HASHMAP_SEED.clone());
         for i in 0..INITIAL_CAPACITY {
             storage.insert(i as u64, (i + 1) as u64);
         }
@@ -140,7 +151,7 @@ pub fn generate_operations(
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
-    let mut t_rng = rand::thread_rng();
+    let mut t_rng = SmallRng::seed_from_u64(RNG_SEED);
     let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
     for idx in 0..nop {

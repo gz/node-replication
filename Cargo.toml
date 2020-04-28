@@ -78,3 +78,4 @@ rand = { version = "0.7", features = ["small_rng"] }
 jemallocator = "0.3.2"
 jemalloc-ctl = "0.3.3"
 dashmap = "3.11.1"
+lazy_static = "1.4"

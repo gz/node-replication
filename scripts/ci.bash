@@ -4,6 +4,15 @@
 #
 set -ex
 
+for cores in `seq 1 1 $MAX_CORES`; do
+    RUST_TEST_THREADS=1 cargo bench --bench hashmap -- socket --threads ${cores}
+done
+
+for cores in `seq 1 1 $MAX_CORES`; do
+    RUST_TEST_THREADS=1 cargo bench --bench hashmap -- one --threads ${cores}
+done
+
+
 #RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack

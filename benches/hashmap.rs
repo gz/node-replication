@@ -32,10 +32,10 @@ extern crate jemallocator;
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// The initial amount of entries all Hashmaps are initialized with
-pub const INITIAL_CAPACITY: usize = 50_000_000;
+pub const INITIAL_CAPACITY: usize = 100_000_000;
 
 // Biggest key in the hash-map
-pub const KEY_SPACE: usize = 50_000_000;
+pub const KEY_SPACE: usize = 100_000_000;
 
 // Key distribution for all hash-maps [uniform|skewed]
 pub const UNIFORM: &'static str = "uniform";
@@ -71,16 +71,17 @@ pub enum OpConcurrent {
 /// We just use a vector.
 #[derive(Debug, Clone)]
 pub struct NrHashMap {
-    storage: HashMap<u64, CachePadded<u64>>,
+    storage: HashMap<u64, u64>,
 }
 
 impl NrHashMap {
     pub fn put(&mut self, key: u64, val: u64) {
-        self.storage.insert(key, CachePadded::new(val));
+        self.storage.insert(key, val);
     }
 
     pub fn get(&self, key: u64) -> Option<u64> {
-        self.storage.get(&key).map(|v| **v)
+        //self.storage.get(&key).map(|v| **v)
+        std::hint::black_box(Some(42))
     }
 }
 
@@ -89,7 +90,7 @@ impl Default for NrHashMap {
     fn default() -> NrHashMap {
         let mut storage = HashMap::with_capacity(INITIAL_CAPACITY);
         for i in 0..INITIAL_CAPACITY {
-            storage.insert(i as u64, CachePadded::new((i + 1) as u64));
+            storage.insert(i as u64, (i + 1) as u64);
         }
         NrHashMap { storage }
     }
@@ -317,7 +318,7 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 50, 100];
+    let write_ratios = vec![0];
     unsafe {
         urcu_sys::rcu_init();
     }
@@ -325,7 +326,7 @@ fn main() {
     //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
-        partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
+        //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
         //concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
         //concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
         //concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);

@@ -615,7 +615,7 @@ where
                     utils::pin_thread(core_id);
                     // Copy the actual Vec<Operations> data within the thread
                     let mut operations = (*operations).clone();
-                    operations.shuffle(&mut SmallRng::seed_from_u64(RNG_SEED));
+                    operations.shuffle(&mut rand::thread_rng());
 
                     if name.starts_with("urcu") {
                         unsafe {

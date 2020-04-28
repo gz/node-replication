@@ -47,9 +47,6 @@ pub const UNIFORM: &'static str = "uniform";
 // Number of operation for test-harness.
 pub const NOP: usize = 50_000_000;
 
-// Rng Seed
-pub const RNG_SEED: u64 = 0xdead_beef_beef_dead;
-
 lazy_static! {
     /// Use same seed for all hashmaps
     static ref HASHMAP_SEED: RandomState = RandomState::new();
@@ -151,7 +148,7 @@ pub fn generate_operations(
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
-    let mut t_rng = SmallRng::seed_from_u64(RNG_SEED);
+    let mut t_rng = SmallRng::seed_from_u64(mkbench::RNG_SEED);
     let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
     for idx in 0..nop {

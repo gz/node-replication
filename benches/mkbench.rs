@@ -39,6 +39,9 @@ pub use crate::utils::topology::ThreadMapping;
 
 use arr_macro::arr;
 
+/// Rng Seed
+pub const RNG_SEED: u64 = 0xdead_beef_beef_dead;
+
 /// Threshold after how many iterations we log a warning for busy spinning loops.
 ///
 /// This helps with debugging to figure out where things may end up blocking.
@@ -612,7 +615,7 @@ where
                     utils::pin_thread(core_id);
                     // Copy the actual Vec<Operations> data within the thread
                     let mut operations = (*operations).clone();
-                    operations.shuffle(&mut rand::rngs::SmallRng::from_entropy());
+                    operations.shuffle(&mut SmallRng::seed_from_u64(RNG_SEED));
 
                     if name.starts_with("urcu") {
                         unsafe {

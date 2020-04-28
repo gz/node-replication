@@ -77,3 +77,5 @@ clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
 dashmap = "3.11.1"
 lazy_static = "1.4"
+jemallocator = { git = "https://github.com/gz/jemallocator.git" }
+jemalloc-ctl = { git = "https://github.com/gz/jemallocator.git" }

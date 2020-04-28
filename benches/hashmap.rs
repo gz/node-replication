@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::Sync;
 
+use clap::{crate_version, value_t, App, Arg};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore, SeedableRng};
@@ -227,8 +228,13 @@ fn hashmap_single_threaded(c: &mut TestHarness) {
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
-fn hashmap_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: usize)
-where
+fn hashmap_scale_out<R>(
+    c: &mut TestHarness,
+    name: &str,
+    write_ratio: usize,
+    strat: mkbench::ReplicaStrategy,
+    threads: usize,
+) where
     R: ReplicaTrait + Send + Sync + 'static,
     R::D: Send,
     R::D: Dispatch<ReadOperation = OpRd>,
@@ -242,9 +248,8 @@ where
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<R>::new(ops)
-        .thread_defaults()
-        .replica_strategy(mkbench::ReplicaStrategy::One)
-        .replica_strategy(mkbench::ReplicaStrategy::Socket)
+        .threads(threads)
+        .replica_strategy(strat)
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
         .configure(
@@ -336,6 +341,34 @@ fn purge_arenas() {
 fn main() {
     let _r = env_logger::try_init();
     utils::disable_dvfs();
+    let args = std::env::args().filter(|e| e != "--bench");
+
+    let matches = App::new("HashMap Benchmark")
+        .version(crate_version!())
+        .author("Gerd Zellweger <mail@gerdzellweger.com>")
+        .arg(
+            Arg::with_name("threads")
+                .long("threads")
+                .help("Set the number of readers")
+                .required(true)
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("strategy")
+                .help("Set the strategy")
+                .takes_value(true)
+                .required(true)
+                .possible_values(&["one", "socket"])
+                .help("What strategy."),
+        )
+        .get_matches_from(args);
+
+    let threads = value_t!(matches, "threads", usize).unwrap_or_else(|e| e.exit());
+    let strategy = match matches.value_of("strategy").unwrap_or("One") {
+        "one" => mkbench::ReplicaStrategy::One,
+        "socket" => mkbench::ReplicaStrategy::Socket,
+        _ => unreachable!(),
+    };
 
     let mut harness = Default::default();
     let write_ratios = vec![0];
@@ -346,7 +379,13 @@ fn main() {
     //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
         //purge_arenas();
-        hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
+        hashmap_scale_out::<Replica<NrHashMap>>(
+            &mut harness,
+            "hashmap",
+            write_ratio,
+            strategy,
+            threads,
+        );
         //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
         //concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
         //concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);

@@ -16,7 +16,7 @@ done
 #RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack
-RUST_TEST_THREADS=1 timeout 9h cargo bench --bench hashmap
+#RUST_TEST_THREADS=1 timeout 9h cargo bench --bench hashmap
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
 RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
 

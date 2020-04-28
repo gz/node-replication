@@ -40,7 +40,7 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 pub const INITIAL_CAPACITY: usize = 100_000_000;
 
 // Biggest key in the hash-map
-pub const KEY_SPACE: usize = 100_000_000;
+pub const KEY_SPACE: usize = 50_000_000;
 
 // Key distribution for all hash-maps [uniform|skewed]
 pub const UNIFORM: &'static str = "uniform";
@@ -98,7 +98,7 @@ impl Default for NrHashMap {
     /// Return a dummy hash-map with `INITIAL_CAPACITY` elements.
     fn default() -> NrHashMap {
         let mut storage = HashMap::with_capacity_and_hasher(INITIAL_CAPACITY, HASHMAP_SEED.clone());
-        for i in 0..INITIAL_CAPACITY {
+        for i in 0..KEY_SPACE {
             storage.insert(i as u64, (i + 1) as u64);
         }
         NrHashMap { storage }

@@ -321,6 +321,22 @@ where
         );
 }
 
+fn purge_arenas() {
+    use core::ptr;
+    let field = "arena.4096.purge\0";
+    let mut code;
+    code = unsafe {
+        jemalloc_sys::mallctl(
+            field.as_ptr() as *const _,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            0,
+        )
+    };
+    assert_eq!(code, 0);
+}
+
 fn main() {
     let _r = env_logger::try_init();
     utils::disable_dvfs();
@@ -333,6 +349,7 @@ fn main() {
 
     //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
+        purge_arenas();
         hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
         //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
         //concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);

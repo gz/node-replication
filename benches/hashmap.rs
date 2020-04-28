@@ -30,10 +30,12 @@ use utils::benchmark::*;
 use utils::topology::ThreadMapping;
 use utils::Operation;
 
-extern crate jemallocator;
+extern crate tcmalloc;
+
+use tcmalloc::TCMalloc;
 
 #[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static GLOBAL: TCMalloc = TCMalloc;
 
 /// The initial amount of entries all Hashmaps are initialized with
 pub const INITIAL_CAPACITY: usize = 100_000_000;
@@ -321,6 +323,7 @@ where
         );
 }
 
+/*
 fn purge_arenas() {
     use core::ptr;
     let field = "arena.4096.purge\0";
@@ -336,7 +339,7 @@ fn purge_arenas() {
     };
     assert_eq!(code, 0);
 }
-
+*/
 fn main() {
     let _r = env_logger::try_init();
     utils::disable_dvfs();
@@ -349,7 +352,7 @@ fn main() {
 
     //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
-        purge_arenas();
+        //purge_arenas();
         hashmap_scale_out::<Replica<NrHashMap>>(&mut harness, "hashmap", write_ratio);
         //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
         //concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);

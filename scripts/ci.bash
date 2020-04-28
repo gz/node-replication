@@ -4,6 +4,8 @@
 #
 set -ex
 
+MAX_CORES=`nproc`
+
 for cores in `seq 1 1 $MAX_CORES`; do
     RUST_TEST_THREADS=1 cargo bench --bench hashmap -- socket --threads ${cores}
 done

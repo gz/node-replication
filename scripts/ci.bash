@@ -4,21 +4,12 @@
 #
 set -ex
 
-MAX_CORES=`nproc`
-
-for cores in `seq 1 4 $MAX_CORES`; do
-    RUST_TEST_THREADS=1 cargo bench --bench hashmap -- socket --threads ${cores}
-done
-
-for cores in `seq 1 4 $MAX_CORES`; do
-    RUST_TEST_THREADS=1 cargo bench --bench hashmap -- one --threads ${cores}
-done
-
 #RUST_TEST_THREADS=1 timeout 1h cargo bench --bench log
-#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic
-#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack
-#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
-#RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench synthetic
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench stack
+RUST_TEST_THREADS=1 timeout 9h cargo bench --bench hashmap
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench vspace
+RUST_TEST_THREADS=1 timeout 1h cargo bench --bench memfs
 
 timeout 1.5h bash benches/hashbench_run.sh
 timeout 1.5h bash benches/rwlockbench_run.sh

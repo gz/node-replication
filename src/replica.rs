@@ -78,7 +78,7 @@ where
 
 /// Combiner queue structure
 #[repr(align(64))]
-pub struct CombinerQueue <'a, D>
+pub struct CombinerQueue<'a, D>
 where
     D: Sized + Default + Dispatch + Sync,
 {
@@ -684,7 +684,6 @@ where
         let mut cur_qnode = qnode;
 
         while processed < max_ids {
-
             let id = (*cur_qnode).idx.load(Ordering::Acquire);
             operations[id - 1] = self.contexts[id - 1].ops(&mut buffer);
             processed_ids[processed] = id - 1;
@@ -692,11 +691,11 @@ where
 
             let mut next_qnode = cur_qnode.next.load(Ordering::Acquire);
             if next_qnode.is_null() {
-                if self.qcombiner
-                    .cqueue
-                    .tail
-                    .compare_and_swap(cur_qnode, ptr::null_mut(), Ordering::SeqCst)
-                    == cur_qnode {
+                if self.qcombiner.cqueue.tail.compare_and_swap(
+                    cur_qnode,
+                    ptr::null_mut(),
+                    Ordering::SeqCst
+                ) == cur_qnode {
                     (*cur_qnode).completed.store(true, Ordering::Relaxed);
                     (*cur_qnode).wait.store(false, Ordering::Release);
                     break;

@@ -4,7 +4,7 @@
 use core::cell::RefCell;
 use core::mem::MaybeUninit;
 use core::ptr;
-use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, AtomicPtr, Ordering};
+use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -694,8 +694,9 @@ where
                 if self.qcombiner.cqueue.tail.compare_and_swap(
                     cur_qnode,
                     ptr::null_mut(),
-                    Ordering::SeqCst
-                ) == cur_qnode {
+                    Ordering::SeqCst,
+                ) == cur_qnode
+                {
                     (*cur_qnode).completed.store(true, Ordering::Relaxed);
                     (*cur_qnode).wait.store(false, Ordering::Release);
                     break;

@@ -3,7 +3,8 @@
 
 use core::cell::RefCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{spin_loop_hint, AtomicUsize, Ordering};
+use core::ptr;
+use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -27,6 +28,141 @@ const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
 
+/// Combiner specific data structures
+/// Qnode
+#[repr(align(64))]
+pub struct QNode<'a, D>
+where
+    D: Sized + Default + Dispatch + Sync,
+{
+    next: AtomicPtr<QNode<'a, D>>,
+    wait: AtomicBool,
+    completed: AtomicBool,
+    idx: AtomicUsize,
+}
+
+impl<'a, D> Default for QNode<'a, D>
+where
+    D: Sized + Default + Dispatch + Sync,
+{
+    fn default() -> QNode<'a, D> {
+        QNode {
+            next: AtomicPtr::new(ptr::null_mut()),
+            wait: AtomicBool::new(false),
+            completed: AtomicBool::new(false),
+            idx: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl<'a, D> QNode<'a, D>
+where
+    D: Sized + Default + Dispatch + Sync,
+{
+    fn new<'b>(wait: bool, idx: usize) -> QNode<'b, D> {
+        QNode {
+            next: AtomicPtr::new(ptr::null_mut()),
+            wait: AtomicBool::new(wait),
+            completed: AtomicBool::new(false),
+            idx: AtomicUsize::new(idx),
+        }
+    }
+
+    pub fn init_qnode(&mut self, wait: bool) {
+        self.next = AtomicPtr::new(ptr::null_mut());
+        self.wait = AtomicBool::new(wait);
+        self.completed = AtomicBool::new(false);
+        self.idx = AtomicUsize::new(0);
+    }
+}
+
+/// Combiner queue structure
+#[repr(align(64))]
+pub struct CombinerQueue<'a, D>
+where
+    D: Sized + Default + Dispatch + Sync,
+{
+    /// The CLH tail
+    tail: CachePadded<AtomicPtr<QNode<'a, D>>>,
+    toplock: CachePadded<AtomicUsize>,
+}
+
+impl<'a, D> CombinerQueue<'a, D>
+where
+    D: Sized + Default + Dispatch + Sync,
+{
+    pub fn new<'b>() -> CombinerQueue<'b, D> {
+        CombinerQueue {
+            tail: CachePadded::new(AtomicPtr::new(ptr::null_mut())),
+            toplock: CachePadded::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+pub struct Combiner<'a, D>
+where
+    D: Sync + Default + Dispatch + Sync,
+{
+    cqueue: CachePadded<CombinerQueue<'a, D>>,
+    qnodes: [QNode<'a, D>; MAX_THREADS_PER_REPLICA],
+    qnode_ptrs: Arc<[CachePadded<AtomicPtr<QNode<'a, D>>>; MAX_THREADS_PER_REPLICA]>,
+}
+
+impl<'a, D> Default for Combiner<'a, D>
+where
+    D: Sync + Default + Dispatch + Sync,
+{
+    fn default() -> Combiner<'a, D> {
+        Combiner {
+            cqueue: CachePadded::new(CombinerQueue::new()),
+            qnodes: arr![QNode::<D>::default(); 256],
+            qnode_ptrs: Arc::new(arr![Default::default(); 256]),
+        }
+    }
+}
+
+impl<'a, D> Combiner<'a, D>
+where
+    D: Sync + Default + Dispatch + Sync,
+{
+    pub fn new<'b>() -> Combiner<'b, D> {
+        Combiner {
+            cqueue: CachePadded::new(CombinerQueue::new()),
+            qnodes: arr![QNode::<D>::default(); 256],
+            qnode_ptrs: Arc::new(arr![Default::default(); 256]),
+        }
+    }
+
+    fn init(&mut self) {
+        for idx in 0..MAX_THREADS_PER_REPLICA {
+            self.qnodes[idx] = QNode::new(false, idx + 1);
+            self.qnode_ptrs[idx].store(&mut self.qnodes[idx], Ordering::Relaxed);
+        }
+        self.cqueue.tail.store(ptr::null_mut(), Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    pub fn acquire_tlock(&self, tid: usize) {
+        while self
+            .cqueue
+            .toplock
+            .compare_and_swap(0, tid, Ordering::Acquire)
+            != 0
+        {}
+    }
+
+    #[inline(always)]
+    pub fn release_tlock(&self) {
+        self.cqueue.toplock.store(0, Ordering::Release);
+    }
+
+    #[inline(always)]
+    pub fn init_qnode(&self, qnode: &mut QNode<'a, D>, wait: bool) {
+        let qnode = &mut *qnode;
+        qnode.init_qnode(wait);
+    }
+}
+
 /// An instance of a replicated data structure. Uses a shared log to scale operations on
 /// the data structure across cores and processors.
 ///
@@ -48,7 +184,7 @@ where
     /// Thread idx of the thread currently responsible for flat combining. Zero
     /// if there isn't any thread actively performing flat combining on the log.
     /// This also doubles up as the combiner lock.
-    combiner: CachePadded<AtomicUsize>,
+    qcombiner: CachePadded<Combiner<'a, D>>,
 
     /// Idx that will be handed out to the next thread that registers with the replica.
     next: CachePadded<AtomicUsize>,
@@ -167,7 +303,8 @@ where
             let uninit_ptr = Arc::get_mut_unchecked(&mut uninit_replica).as_mut_ptr();
             uninit_ptr.write(Replica {
                 idx: log.register().unwrap(),
-                combiner: CachePadded::new(AtomicUsize::new(0)),
+                // combiner: CachePadded::new(AtomicUsize::new(0)),
+                qcombiner: CachePadded::new(Combiner::new()),
                 next: CachePadded::new(AtomicUsize::new(1)),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
                 buffer: RefCell::new(Vec::with_capacity(
@@ -199,6 +336,7 @@ where
                     .contexts
                     .push(Default::default());
             }
+            Arc::get_mut(&mut replica).unwrap().qcombiner.init();
 
             replica
         }
@@ -419,11 +557,12 @@ where
     pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
-        while self
-            .combiner
-            .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
-            != 0
-        {}
+        // while self
+        //     .qcombiner.cqueue.toplock
+        //     .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
+        //     != 0
+        // {}
+        self.qcombiner.acquire_tlock(MAX_THREADS_PER_REPLICA + 2);
 
         let mut data = self.data.write(self.next.load(Ordering::Relaxed));
 
@@ -436,7 +575,8 @@ where
 
         v(&data);
 
-        self.combiner.store(0, Ordering::Release);
+        // self.qcombiner.cqueue.toplock.store(0, Ordering::Release);
+        self.qcombiner.release_tlock();
     }
 
     /// Syncs up the replica against the underlying log and executes a passed in
@@ -444,15 +584,18 @@ where
     pub fn sync<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(&self, mut d: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
-        while self
-            .combiner
-            .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
-            != 0
-        {}
+        // while self
+        //     .qcombiner
+        //     .cqueue.toplock
+        //     .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
+        //     != 0
+        // {}
+        self.qcombiner.acquire_tlock(MAX_THREADS_PER_REPLICA + 2);
 
         self.slog.exec(self.idx, &mut d);
 
-        self.combiner.store(0, Ordering::Release);
+        // self.qcombiner.cqueue.toplock.store(0, Ordering::Release);
+        self.qcombiner.release_tlock();
     }
 
     /// Issues a read-only operation against the replica and returns a response.
@@ -483,55 +626,97 @@ where
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
     fn try_combine(&self, tid: usize) {
-        // First, check if there already is a flat combiner. If there is no active flat combiner
-        // then try to acquire the combiner lock. If there is, then just return.
-        for _i in 0..4 {
-            if unsafe {
-                *(&self.combiner
-                    as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
-                    as *const usize)
-            } != 0
-            {
-                return;
-            };
+        // get the qnode
+        let cur_qnode = self.qcombiner.qnode_ptrs[tid - 1].load(Ordering::Relaxed);
+
+        // initialize the next qnode to be locked,
+        // because this thread will work on the previous one
+        unsafe {
+            (*cur_qnode).next = AtomicPtr::new(ptr::null_mut());
+            (*cur_qnode).wait = AtomicBool::new(true);
+            (*cur_qnode).completed = AtomicBool::new(false);
+            // (*cur_qnode).idx.store(tid, Ordering::Release);
         }
 
-        // Try to become the combiner here. If this fails, then simply return.
-        if self.combiner.compare_and_swap(0, tid, Ordering::Acquire) != 0 {
+        // Append the next qnode and use the cur qnode,
+        // which is the previous node in the list to process
+        // the current request
+        let prev_qnode = self.qcombiner.cqueue.tail.swap(cur_qnode, Ordering::SeqCst);
+        let cur_qnode = unsafe { &mut *cur_qnode };
+
+        if prev_qnode.is_null() {
+            // println!("pre_qnode is null");
+            (*cur_qnode).wait.store(false, Ordering::Relaxed);
+        } else {
+            let prev_qnode = unsafe { &mut *prev_qnode };
+
+            (*prev_qnode).next.store(cur_qnode, Ordering::Release);
+        }
+        // wait until it is unlocked
+        while (*cur_qnode).wait.load(Ordering::Acquire) == true {
+            spin_loop_hint();
+        }
+
+        // if the request was done, then leave
+        if (*cur_qnode).completed.load(Ordering::Relaxed) == true {
             return;
         }
 
-        // Successfully became the combiner; perform one round of flat combining.
-        self.combine();
-
-        // Allow other threads to perform flat combining once we have finished all our work.
-        // At this point, we've dropped all mutable references to thread contexts and to
-        // the staging buffer as well.
-        self.combiner.store(0, Ordering::Release);
+        self.qcombiner.acquire_tlock(tid);
+        self.combine(cur_qnode);
+        self.qcombiner.release_tlock();
     }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
-    #[inline(always)]
-    fn combine(&self) {
+    // #[inline(always)]
+    fn combine(&self, qnode: &mut QNode<'a, D>) {
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
+        let mut processed = 0;
+        let mut processed_ids: [usize; MAX_THREADS_PER_REPLICA] = [0; MAX_THREADS_PER_REPLICA];
 
         buffer.clear();
         results.clear();
 
-        let next = self.next.load(Ordering::Relaxed);
+        let max_ids = self.next.load(Ordering::Relaxed);
 
-        // Collect operations from each thread registered with this replica.
-        for i in 1..next {
-            operations[i - 1] = self.contexts[i - 1].ops(&mut buffer);
+        let mut cur_qnode = qnode;
+
+        while processed < max_ids {
+            let id = (*cur_qnode).idx.load(Ordering::Acquire);
+            operations[id - 1] = self.contexts[id - 1].ops(&mut buffer);
+            processed_ids[processed] = id - 1;
+            processed += 1;
+
+            let mut next_qnode = cur_qnode.next.load(Ordering::Acquire);
+            if next_qnode.is_null() {
+                if self.qcombiner.cqueue.tail.compare_and_swap(
+                    cur_qnode,
+                    ptr::null_mut(),
+                    Ordering::SeqCst,
+                ) == cur_qnode
+                {
+                    (*cur_qnode).completed.store(true, Ordering::Relaxed);
+                    (*cur_qnode).wait.store(false, Ordering::Release);
+                    break;
+                } else {
+                    while next_qnode.is_null() {
+                        next_qnode = cur_qnode.next.load(Ordering::Acquire);
+                    }
+                }
+            }
+            (*cur_qnode).completed.store(true, Ordering::Relaxed);
+            (*cur_qnode).wait.store(false, Ordering::Release);
+            cur_qnode = unsafe { &mut *next_qnode };
         }
+        (*cur_qnode).wait.store(false, Ordering::Release);
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
             let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
-                let resp = self.data.write(next).dispatch_mut(o);
+                let resp = self.data.write(max_ids).dispatch_mut(o);
                 if i == self.idx {
                     results.push(resp);
                 }
@@ -541,7 +726,7 @@ where
 
         // Execute any operations on the shared log against this replica.
         {
-            let mut data = self.data.write(next);
+            let mut data = self.data.write(max_ids);
             let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 let resp = data.dispatch_mut(o);
                 if i == self.idx {
@@ -553,15 +738,12 @@ where
 
         // Return/Enqueue responses back into the appropriate thread context(s).
         let (mut s, mut f) = (0, 0);
-        for i in 1..next {
-            if operations[i - 1] == 0 {
-                continue;
-            };
-
-            f += operations[i - 1];
-            self.contexts[i - 1].enqueue_resps(&results[s..f]);
-            s += operations[i - 1];
-            operations[i - 1] = 0;
+        for i in 0..processed {
+            let id = processed_ids[i];
+            f += operations[id];
+            self.contexts[id].enqueue_resps(&results[s..f]);
+            s += operations[id];
+            operations[id] = 0;
         }
     }
 }
@@ -607,7 +789,7 @@ mod test {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
         assert_eq!(repl.idx, 1);
-        assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
+        assert_eq!(repl.qcombiner.cqueue.toplock.load(Ordering::SeqCst), 0);
         assert_eq!(repl.next.load(Ordering::SeqCst), 1);
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
@@ -679,7 +861,7 @@ mod test {
         repl.make_pending(121, 1);
         repl.try_combine(1);
 
-        assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
+        assert_eq!(repl.qcombiner.cqueue.toplock.load(Ordering::SeqCst), 0);
         assert_eq!(repl.data.read(0).junk, 1);
         assert_eq!(repl.contexts[0].res(), Some(Ok(107)));
     }
@@ -692,26 +874,26 @@ mod test {
 
         repl.next.store(9, Ordering::SeqCst);
         repl.make_pending(121, 8);
-        repl.try_combine(1);
+        repl.try_combine(8);
 
         assert_eq!(repl.data.read(0).junk, 1);
         assert_eq!(repl.contexts[7].res(), Some(Ok(107)));
     }
 
     // Tests whether try_combine() fails if someone else is currently flat combining.
-    #[test]
-    fn test_replica_try_combine_fail() {
-        let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
-        let repl = Replica::<Data>::new(&slog);
+    // #[test]
+    // fn test_replica_try_combine_fail() {
+    //     let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
+    //     let repl = Replica::<Data>::new(&slog);
 
-        repl.next.store(9, Ordering::SeqCst);
-        repl.combiner.store(8, Ordering::SeqCst);
-        repl.make_pending(121, 1);
-        repl.try_combine(1);
+    //     repl.next.store(9, Ordering::SeqCst);
+    //     repl.qcombiner.cqueue.toplock.store(8, Ordering::SeqCst);
+    //     repl.make_pending(121, 1);
+    //     repl.try_combine(1);
 
-        assert_eq!(repl.data.read(0).junk, 0);
-        assert_eq!(repl.contexts[0].res(), None);
-    }
+    //     assert_eq!(repl.data.read(0).junk, 0);
+    //     assert_eq!(repl.contexts[0].res(), None);
+    // }
 
     // Tests whether we can execute an operation against the log using execute().
     #[test]

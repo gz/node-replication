@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
@@ -16,13 +16,38 @@ use super::log::Log;
 use super::rwlock::RwLock;
 use super::Dispatch;
 
+/// A token handed out to threads registered with replicas.
+///
+/// # Note
+/// Ideally this would be an affine type and returned again by
+/// `execute` and `execute_ro`. However it feels like this would
+/// hurt API ergonomics a lot.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ReplicaToken(usize);
+
+/// To make it harder to use the same ReplicaToken on multiple threads.
+impl !Send for ReplicaToken {}
+
+impl ReplicaToken {
+    /// Creates a new ReplicaToken
+    ///
+    /// # Safety
+    /// This should only ever be used for the benchmark harness to create
+    /// additional fake replica implementations.
+    /// If we had a means to declare this not-pub we should do that instead.
+    #[doc(hidden)]
+    pub unsafe fn new(ident: usize) -> Self {
+        ReplicaToken(ident)
+    }
+}
+
 /// The maximum number of threads that can be registered with a replica. If more than
 /// this number of threads try to register, the register() function will return None.
 ///
 /// # Important
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
-/// have to adjust the `128` literals in the `new` constructor of `Replica`.
-pub const MAX_THREADS_PER_REPLICA: usize = 128;
+/// have to adjust the `256` literals in the `new` constructor of `Replica`.
+pub const MAX_THREADS_PER_REPLICA: usize = 256;
 const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
@@ -34,13 +59,14 @@ const STALL_COUNTS: usize = 10_000_000;
 /// An instance of a replicated data structure. Uses a shared log to scale operations on
 /// the data structure across cores and processors.
 ///
-/// Takes in one type argument: `D` represents the replicated data structure against which
-/// said operations will be run. `D` must implement the `Dispatch` trait.
+/// Takes in one type argument: `D` represents the underlying sequential data
+/// structure `D` must implement the `Dispatch` trait.
 ///
-/// A thread can be registered against the replica by calling `register()`. An operation can
-/// be issued by calling `execute()`. This operation will be eventually executed against the
-/// replica along with those that were received on other replicas that share the same
-/// underlying log.
+/// A thread can be registered against the replica by calling `register()`. A
+/// mutable operation can be issued by calling `execute_mut()` (immutable uses
+/// `execute`). A mutable operation will be eventually executed against the replica
+/// along with any operations that were received on other replicas that share
+/// the same underlying log.
 pub struct Replica<'a, D>
 where
     D: Sized + Default + Dispatch + Sync,
@@ -61,13 +87,7 @@ where
     /// cannot perform flat combining (because another thread might be doing so).
     ///
     /// The vector is initialized with `MAX_THREADS_PER_REPLICA` elements.
-    contexts: Vec<
-        Context<
-            <D as Dispatch>::WriteOperation,
-            <D as Dispatch>::Response,
-            <D as Dispatch>::ResponseError,
-        >,
-    >,
+    contexts: Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
 
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
@@ -81,7 +101,7 @@ where
 
     /// A buffer of results collected after flat combining. With the help of `inflight`,
     /// the combiner enqueues these results into the appropriate thread context.
-    result: RefCell<Vec<Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError>>>,
+    result: RefCell<Vec<<D as Dispatch>::Response>>,
 
     /// Reference to the shared log that operations will be appended to and the
     /// data structure will be updated from.
@@ -94,6 +114,9 @@ where
     /// Stores the stall cycles when different threads are run simultenously.
     #[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
     stall: CachePadded<RefCell<Vec<u64>>>,
+
+    #[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
+    executed: CachePadded<RefCell<Vec<usize>>>,
 }
 
 /// The Replica is Sync. Member variables are protected by a CAS on `combiner`.
@@ -115,19 +138,17 @@ where
 {
     /// Constructs an instance of a replicated data structure.
     ///
-    /// Takes in a reference to the shared log as an argument. The Log is assumed to
+    /// Takes a reference to the shared log as an argument. The Log is assumed to
     /// outlive the replica. The replica is bound to the log's lifetime.
     ///
     /// # Example
     ///
     /// ```
-    /// extern crate alloc;
-    ///
     /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::Log;
+    /// use node_replication::Replica;
     ///
-    /// use alloc::sync::Arc;
+    /// use std::sync::Arc;
     ///
     /// // The data structure we want replicated.
     /// #[derive(Default)]
@@ -140,23 +161,22 @@ where
     ///     type ReadOperation = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
-    ///     type ResponseError = ();
     ///
     ///     // A read returns the underlying u64.
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
-    ///         Ok(Some(self.junk))
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
     ///     }
     ///
     ///     // A write updates the underlying u64.
     ///     fn dispatch_mut(
     ///         &mut self,
     ///         op: Self::WriteOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///     ) -> Self::Response {
     ///         self.junk = op;
-    ///         Ok(None)
+    ///         None
     ///     }
     /// }
     ///
@@ -177,33 +197,39 @@ where
                 idx: log.register().unwrap(),
                 combiner: CachePadded::new(AtomicUsize::new(0)),
                 next: CachePadded::new(AtomicUsize::new(1)),
-                contexts: Vec::with_capacity(128),
-                buffer: RefCell::new(Vec::with_capacity(
-                    MAX_THREADS_PER_REPLICA
-                        * Context::<
-                            <D as Dispatch>::WriteOperation,
-                            <D as Dispatch>::Response,
-                            <D as Dispatch>::ResponseError,
-                        >::batch_size(),
-                )),
-                inflight: RefCell::new(arr![Default::default(); 128]),
-                result: RefCell::new(Vec::with_capacity(
-                    MAX_THREADS_PER_REPLICA
-                        * Context::<
-                            <D as Dispatch>::WriteOperation,
-                            <D as Dispatch>::Response,
-                            <D as Dispatch>::ResponseError,
-                        >::batch_size(),
-                )),
+                contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
+                buffer:
+                    RefCell::new(
+                        Vec::with_capacity(
+                            MAX_THREADS_PER_REPLICA
+                                * Context::<
+                                    <D as Dispatch>::WriteOperation,
+                                    <D as Dispatch>::Response,
+                                >::batch_size(),
+                        ),
+                    ),
+                inflight: RefCell::new(arr![Default::default(); 256]),
+                result:
+                    RefCell::new(
+                        Vec::with_capacity(
+                            MAX_THREADS_PER_REPLICA
+                                * Context::<
+                                    <D as Dispatch>::WriteOperation,
+                                    <D as Dispatch>::Response,
+                                >::batch_size(),
+                        ),
+                    ),
                 slog: log.clone(),
                 data: CachePadded::new(RwLock::<D>::default()),
                 #[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
                 stall: CachePadded::new(RefCell::new(Vec::with_capacity(STALL_COUNTS))),
+                #[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
+                executed: CachePadded::new(RefCell::new(Vec::with_capacity(STALL_COUNTS))),
             });
 
             let mut replica = uninit_replica.assume_init();
             // Add `MAX_THREADS_PER_REPLICA` contexts
-            for _idx in 0..128 {
+            for _idx in 0..MAX_THREADS_PER_REPLICA {
                 Arc::get_mut(&mut replica)
                     .unwrap()
                     .contexts
@@ -220,13 +246,11 @@ where
     /// # Example
     ///
     /// ```
-    /// extern crate alloc;
-    ///
     /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::Log;
+    /// use node_replication::Replica;
     ///
-    /// use alloc::sync::Arc;
+    /// use std::sync::Arc;
     ///
     /// #[derive(Default)]
     /// struct Data {
@@ -237,21 +261,20 @@ where
     ///     type ReadOperation = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
-    ///     type ResponseError = ();
     ///
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
-    ///         Ok(Some(self.junk))
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
     ///     }
     ///
     ///     fn dispatch_mut(
     ///         &mut self,
     ///         op: Self::WriteOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///     ) -> Self::Response {
     ///         self.junk = op;
-    ///         Ok(None)
+    ///         None
     ///     }
     /// }
     ///
@@ -262,7 +285,7 @@ where
     /// // operations against the replica.
     /// let idx = replica.register().expect("Failed to register with replica.");
     /// ```
-    pub fn register(&self) -> Option<usize> {
+    pub fn register(&self) -> Option<ReplicaToken> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
             let idx = self.next.load(Ordering::SeqCst);
@@ -275,7 +298,7 @@ where
                 continue;
             };
 
-            return Some(idx);
+            return Some(ReplicaToken(idx));
         }
     }
 
@@ -285,13 +308,11 @@ where
     /// # Example
     ///
     /// ```
-    /// extern crate alloc;
-    ///
     /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::Log;
+    /// use node_replication::Replica;
     ///
-    /// use alloc::sync::Arc;
+    /// use std::sync::Arc;
     ///
     /// #[derive(Default)]
     /// struct Data {
@@ -302,21 +323,20 @@ where
     ///     type ReadOperation = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
-    ///     type ResponseError = ();
     ///
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
-    ///         Ok(Some(self.junk))
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
     ///     }
     ///
     ///     fn dispatch_mut(
     ///         &mut self,
     ///         op: Self::WriteOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///     ) -> Self::Response {
     ///         self.junk = op;
-    ///         Ok(None)
+    ///         None
     ///     }
     /// }
     ///
@@ -324,20 +344,20 @@ where
     /// let replica = Replica::<Data>::new(&log);
     /// let idx = replica.register().expect("Failed to register with replica.");
     ///
-    /// // execute() can be used to write to the replicated data structure.
-    /// let res = replica.execute(100, idx);
-    /// assert_eq!(Ok(None), res);
-    pub fn execute(
+    /// // execute_mut() can be used to write to the replicated data structure.
+    /// let res = replica.execute_mut(100, idx);
+    /// assert_eq!(None, res);
+    pub fn execute_mut(
         &self,
         op: <D as Dispatch>::WriteOperation,
-        idx: usize,
-    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
+        idx: ReplicaToken,
+    ) -> <D as Dispatch>::Response {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        while !self.make_pending(op.clone(), idx) {}
-        self.try_combine(idx);
+        while !self.make_pending(op.clone(), idx.0) {}
+        self.try_combine(idx.0);
 
         // Return the response to the caller function.
-        self.get_response(idx)
+        self.get_response(idx.0)
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -346,13 +366,11 @@ where
     /// # Example
     ///
     /// ```
-    /// extern crate alloc;
-    ///
     /// use node_replication::Dispatch;
-    /// use node_replication::log::Log;
-    /// use node_replication::replica::Replica;
+    /// use node_replication::Log;
+    /// use node_replication::Replica;
     ///
-    /// use alloc::sync::Arc;
+    /// use std::sync::Arc;
     ///
     /// #[derive(Default)]
     /// struct Data {
@@ -363,46 +381,42 @@ where
     ///     type ReadOperation = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
-    ///     type ResponseError = ();
     ///
     ///     fn dispatch(
     ///         &self,
     ///         _op: Self::ReadOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
-    ///         Ok(Some(self.junk))
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
     ///     }
     ///
     ///     fn dispatch_mut(
     ///         &mut self,
     ///         op: Self::WriteOperation,
-    ///     ) -> Result<Self::Response, Self::ResponseError> {
+    ///     ) -> Self::Response {
     ///         self.junk = op;
-    ///         Ok(None)
+    ///         None
     ///     }
     /// }
     ///
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
     /// let replica = Replica::<Data>::new(&log);
     /// let idx = replica.register().expect("Failed to register with replica.");
-    /// let _wr = replica.execute(100, idx);
+    /// let _wr = replica.execute_mut(100, idx);
     ///
-    /// // execute_ro() can be used to read from the replicated data structure.
-    /// let res = replica.execute_ro((), idx);
-    /// assert_eq!(Ok(Some(100)), res);
-    pub fn execute_ro(
+    /// // execute() can be used to read from the replicated data structure.
+    /// let res = replica.execute((), idx);
+    /// assert_eq!(Some(100), res);
+    pub fn execute(
         &self,
         op: <D as Dispatch>::ReadOperation,
-        idx: usize,
-    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
-        self.read_only(op, idx)
+        idx: ReplicaToken,
+    ) -> <D as Dispatch>::Response {
+        self.read_only(op, idx.0)
     }
 
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
-    fn get_response(
-        &self,
-        idx: usize,
-    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
+    fn get_response(&self, idx: usize) -> <D as Dispatch>::Response {
         let mut iter = 0;
         let interval = 1 << 29;
 
@@ -424,8 +438,13 @@ where
     }
 
     /// Executes a passed in closure against the replica's underlying data
-    /// structure. Useful for unit testing; can be used to verify certain properties
-    /// of the data structure after issuing a bunch of operations against it.
+    /// structure. Useful for unit testing; can be used to verify certain
+    /// properties of the data structure after issuing a bunch of operations
+    /// against it.
+    ///
+    /// # Note
+    /// There is probably no need for a regular client to ever call this function.
+    #[doc(hidden)]
     pub fn verify<F: FnMut(&D)>(&self, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.
@@ -437,9 +456,8 @@ where
 
         let mut data = self.data.write(self.next.load(Ordering::Relaxed));
 
-        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| match data.dispatch_mut(o) {
-            Ok(_) => {}
-            Err(_) => error!("Error in operation dispatch"),
+        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
+            data.dispatch_mut(o);
         };
 
         self.slog.exec(self.idx, &mut f);
@@ -449,20 +467,16 @@ where
         self.combiner.store(0, Ordering::Release);
     }
 
-    /// Syncs up the replica against the underlying log and executes a passed in
-    /// closure against all consumed operations.
-    pub fn sync<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(&self, mut d: F) {
-        // Acquire the combiner lock before attempting anything on the data structure.
-        // Use an idx greater than the maximum that can be allocated.
-        while self
-            .combiner
-            .compare_and_swap(0, MAX_THREADS_PER_REPLICA + 2, Ordering::Acquire)
-            != 0
-        {}
-
-        self.slog.exec(self.idx, &mut d);
-
-        self.combiner.store(0, Ordering::Release);
+    /// This method is useful when a replica stops making progress and some threads
+    /// on another replica are still active. The active replica will use all the entries
+    /// in the log and won't be able perform garbage collection because of the inactive
+    /// replica. So, this method syncs up the replica against the underlying log.
+    pub fn sync(&self, idx: ReplicaToken) {
+        let ctail = self.slog.get_ctail();
+        while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
+            self.try_combine(idx.0);
+            spin_loop_hint();
+        }
     }
 
     /// Issues a read-only operation against the replica and returns a response.
@@ -471,11 +485,13 @@ where
         &self,
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
-    ) -> Result<<D as Dispatch>::Response, <D as Dispatch>::ResponseError> {
+    ) -> <D as Dispatch>::Response {
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
-        while !self.slog.is_replica_synced_for_reads(self.idx) {
+        let ctail = self.slog.get_ctail();
+        while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
             self.try_combine(tid);
+            spin_loop_hint();
         }
 
         self.data.read(tid - 1).dispatch(op)
@@ -495,22 +511,21 @@ where
         // then try to acquire the combiner lock. If there is, then just return.
         #[cfg(feature = "combiner-stall")]
         let start = unsafe { x86::time::rdtsc() };
-        let mut combine = 0;
         for _i in 0..4 {
-            combine += unsafe {
-                &*(&self.combiner
-                    as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
-                    as *const usize)
+            if unsafe {
+                core::ptr::read_volatile(
+                    &self.combiner
+                        as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
+                        as *const usize,
+                )
+            } != 0
+            {
+                return;
             };
         }
 
-        if combine != 0 {
-            return;
-        };
-
         // Try to become the combiner here. If this fails, then simply return.
         if self.combiner.compare_and_swap(0, tid, Ordering::Acquire) != 0 {
-            spin_loop_hint();
             return;
         }
         #[cfg(feature = "combiner-stall")]
@@ -570,7 +585,11 @@ where
                     results.push(resp)
                 };
             };
-            self.slog.exec(self.idx, &mut f);
+            let _done = self.slog.exec(self.idx, &mut f);
+            #[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
+            if self.executed.borrow().len() < STALL_COUNTS {
+                self.executed.borrow_mut().push(_done);
+            }
         }
 
         // Return/Enqueue responses back into the appropriate thread context(s).
@@ -596,18 +615,29 @@ where
     fn drop(&mut self) {
         self.stall.borrow_mut().sort();
         let len = self.stall.borrow().len();
-        if len > 0 {
+
+        self.executed.borrow_mut().sort();
+        let exec_len = self.stall.borrow().len();
+
+        if len > 0 && exec_len > 0 {
             let min = self.stall.borrow()[0];
             let median = self.stall.borrow()[len / 2];
             let tail = self.stall.borrow()[(len * 98) / 100];
 
+            let exec_min = self.executed.borrow()[0];
+            let exec_25 = self.executed.borrow()[(exec_len * 25) / 100];
+            let exec_median = self.executed.borrow()[exec_len / 2];
+
             info!(
-                "Replica {} Threads {}, Min(cycles): {}, Median(cycles): {}, Tail(cycles): {}",
+                "Replica {} Threads {}, Min(cycles): {}, Median(cycles): {}, Tail(cycles): {}, ExecMin: {}, Exec25: {}, ExecMedian: {}",
                 self.idx,
                 self.next.load(Ordering::Relaxed) - 1,
                 min,
                 median,
-                tail
+                tail,
+                exec_min,
+                exec_25,
+                exec_median,
             );
         } else {
             info!("Invalid length");
@@ -631,20 +661,13 @@ mod test {
     impl Dispatch for Data {
         type ReadOperation = u64;
         type WriteOperation = u64;
-        type Response = u64;
-        type ResponseError = ();
+        type Response = Result<u64, ()>;
 
-        fn dispatch(
-            &self,
-            _op: Self::ReadOperation,
-        ) -> Result<Self::Response, Self::ResponseError> {
+        fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
             Ok(self.junk)
         }
 
-        fn dispatch_mut(
-            &mut self,
-            _op: Self::WriteOperation,
-        ) -> Result<Self::Response, Self::ResponseError> {
+        fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
             self.junk += 1;
             return Ok(107);
         }
@@ -661,12 +684,12 @@ mod test {
         assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.buffer.borrow().capacity(),
-            MAX_THREADS_PER_REPLICA * Context::<u64, u64, ()>::batch_size()
+            MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
         assert_eq!(repl.inflight.borrow().len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.result.borrow().capacity(),
-            MAX_THREADS_PER_REPLICA * Context::<u64, u64, ()>::batch_size()
+            MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
         assert_eq!(repl.data.read(0).junk, 0);
     }
@@ -676,10 +699,10 @@ mod test {
     fn test_replica_register() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
-        assert_eq!(repl.register(), Some(1));
+        assert_eq!(repl.register(), Some(ReplicaToken(1)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 2);
         repl.next.store(17, Ordering::SeqCst);
-        assert_eq!(repl.register(), Some(17));
+        assert_eq!(repl.register(), Some(ReplicaToken(17)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 18);
     }
 
@@ -711,7 +734,7 @@ mod test {
     fn test_replica_make_pending_false() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024));
         let repl = Replica::<Data>::new(&slog);
-        for _i in 0..Context::<u64, u64, ()>::batch_size() {
+        for _i in 0..Context::<u64, Result<u64, ()>>::batch_size() {
             assert!(repl.make_pending(121, 1))
         }
 
@@ -762,14 +785,14 @@ mod test {
         assert_eq!(repl.contexts[0].res(), None);
     }
 
-    // Tests whether we can execute an operation against the log using execute().
+    // Tests whether we can execute an operation against the log using execute_mut().
     #[test]
     fn test_replica_execute_combine() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
-        let _idx = repl.register();
+        let idx = repl.register().unwrap();
 
-        assert_eq!(Ok(107), repl.execute(121, 1));
+        assert_eq!(Ok(107), repl.execute_mut(121, idx));
         assert_eq!(1, repl.data.read(0).junk);
     }
 
@@ -788,19 +811,19 @@ mod test {
 
     // Tests whether we can issue a read-only operation against the replica.
     #[test]
-    fn test_replica_execute_ro() {
+    fn test_replica_execute() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
         let idx = repl.register().expect("Failed to register with replica.");
 
-        assert_eq!(Ok(107), repl.execute(121, idx));
-        assert_eq!(Ok(1), repl.execute_ro(11, idx));
+        assert_eq!(Ok(107), repl.execute_mut(121, idx));
+        assert_eq!(Ok(1), repl.execute(11, idx));
     }
 
-    // Tests that execute_ro() syncs up the replica with the log before
+    // Tests that execute() syncs up the replica with the log before
     // executing the read against the data structure.
     #[test]
-    fn test_replica_execute_ro_not_synced() {
+    fn test_replica_execute_not_synced() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(&slog);
 
@@ -810,6 +833,6 @@ mod test {
         slog.exec(2, &mut |_o: u64, _i: usize| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
-        assert_eq!(Ok(2), repl.execute_ro(11, t1));
+        assert_eq!(Ok(2), repl.execute(11, t1));
     }
 }

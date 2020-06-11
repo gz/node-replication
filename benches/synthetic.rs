@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines a synthethic data-structure that can be replicated.
@@ -10,22 +10,17 @@
 //! to measure the cache-impact.
 
 #![feature(test)]
-
 use crossbeam_utils::CachePadded;
 use rand::{thread_rng, Rng};
 
 use node_replication::Dispatch;
+use node_replication::Replica;
 
 mod mkbench;
 mod utils;
 
 use utils::benchmark::*;
 use utils::Operation;
-
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// Operations we can perform on the AbstractDataStructure.
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -182,23 +177,19 @@ impl AbstractDataStructure {
 impl Dispatch for AbstractDataStructure {
     type ReadOperation = OpRd;
     type WriteOperation = OpWr;
-    type Response = usize;
-    type ResponseError = ();
+    type Response = Result<usize, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            OpRd::ReadOnly(a, b, c) => return Ok(self.read(a, b, c)),
+            OpRd::ReadOnly(a, b, c) => Ok(self.read(a, b, c)),
         }
     }
 
     /// Implements how we execute operation from the log against abstract DS
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
-            OpWr::WriteOnly(a, b, c) => return Ok(self.write(a, b, c)),
-            OpWr::ReadWrite(a, b, c) => return Ok(self.read_write(a, b, c)),
+            OpWr::WriteOnly(a, b, c) => Ok(self.write(a, b, c)),
+            OpWr::ReadWrite(a, b, c) => Ok(self.read_write(a, b, c)),
         }
     }
 }
@@ -309,7 +300,12 @@ fn synthetic_single_threaded(c: &mut TestHarness) {
     const LOG_SIZE_BYTES: usize = 2 * 1024 * 1024;
 
     let ops = generate_operations(NOP, 0, false, false, true);
-    mkbench::baseline_comparison::<AbstractDataStructure>(c, "synthetic", ops, LOG_SIZE_BYTES);
+    mkbench::baseline_comparison::<Replica<AbstractDataStructure>>(
+        c,
+        "synthetic",
+        ops,
+        LOG_SIZE_BYTES,
+    );
 }
 
 /// Compare scale-out behaviour of synthetic data-structure.
@@ -319,19 +315,19 @@ fn synthetic_scale_out(c: &mut TestHarness) {
     // Operations to perform
     let ops = generate_operations(NOP, 0, false, false, true);
 
-    mkbench::ScaleBenchBuilder::<AbstractDataStructure>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<AbstractDataStructure>>::new(ops)
         .machine_defaults()
         .configure(
             c,
             "synthetic-scaleout",
-            |cid, rid, _log, replica, op, _batch_size, _direct| match op {
+            |cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(mut o) => {
                     o.set_tid(cid as usize);
-                    replica.execute_ro(o, rid).unwrap();
+                    replica.execute(o, rid).unwrap();
                 }
                 Operation::WriteOperation(mut o) => {
                     o.set_tid(cid as usize);
-                    replica.execute(o, rid).unwrap();
+                    replica.execute_mut(o, rid).unwrap();
                 }
             },
         );

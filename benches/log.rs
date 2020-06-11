@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines all default criterion benchmarks we run.
@@ -9,21 +9,23 @@
 extern crate log;
 extern crate zipf;
 
+use std::sync::Arc;
+
 use node_replication::Dispatch;
+use node_replication::Log;
+use node_replication::Replica;
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
+
 use zipf::ZipfDistribution;
 
 mod mkbench;
 mod utils;
 
+use mkbench::ReplicaTrait;
+
 use utils::benchmark::*;
 use utils::Operation;
-
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[derive(Debug, Default, Eq, PartialEq, Copy, Clone)]
 pub struct Nop(usize);
@@ -32,16 +34,12 @@ impl Dispatch for Nop {
     type ReadOperation = ();
     type WriteOperation = usize;
     type Response = ();
-    type ResponseError = ();
 
-    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
         unreachable!();
     }
 
-    fn dispatch_mut(
-        &mut self,
-        _op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!();
     }
 }
@@ -61,7 +59,7 @@ fn log_scale_bench(c: &mut TestHarness) {
         operations.push(Operation::WriteOperation(e));
     }
 
-    mkbench::ScaleBenchBuilder::<Nop>::new(operations)
+    mkbench::ScaleBenchBuilder::<Replica<Nop>>::new(operations)
         .machine_defaults()
         .log_size(LOG_SIZE_BYTES)
         .add_batch(8)
@@ -70,13 +68,9 @@ fn log_scale_bench(c: &mut TestHarness) {
         .configure(
             c,
             "log-append",
-            |_cid, rid, log, _replica, op, batch_size, _direct| match op {
+            |_cid, rid, log, _replica, op, batch_size| match op {
                 Operation::WriteOperation(o) => {
-                    let _r = log.append(
-                        &vec![*o],
-                        rid,
-                        |_o: <Nop as Dispatch>::WriteOperation, _i: usize| {},
-                    );
+                    let _r = log.append(&vec![*o], 0, |_o, _i| {});
                 }
                 _ => unreachable!(),
             },

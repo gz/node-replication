@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::alloc::{alloc, dealloc, Layout};
@@ -18,12 +18,12 @@ use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// The default size of the shared log in bytes. If constructed using the
 /// default constructor, the log will be these many bytes in size. Currently
-/// set to 1 GB based on the ASPLOS 2017 paper.
-const DEFAULT_LOG_BYTES: usize = 1024 * 1024 * 1024;
+/// set to 32 MiB based on the ASPLOS 2017 paper.
+const DEFAULT_LOG_BYTES: usize = 32 * 1024 * 1024;
 const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES - 1) == 0));
 
 /// The maximum number of replicas that can be used against the log.
-const MAX_REPLICAS: usize = 64;
+const MAX_REPLICAS: usize = 192;
 
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
@@ -64,20 +64,27 @@ where
     alivef: AtomicBool,
 }
 
-/// A log of operations that can be shared between multiple NUMA nodes.
+/// A log of operations that is typically accessed by multiple
+/// [Replica](struct.Replica.html).
 ///
 /// Operations can be added to the log by calling the `append()` method and
 /// providing a list of operations to be performed.
 ///
 /// Operations already on the log can be executed by calling the `exec()` method
-/// and providing a replica-id and a closure. Operations added to the log since the
-/// replica last called `exec()` will be executed by invoking the supplied closure over
-/// each one of them.
+/// and providing a replica-id along with a closure. Newly added operations
+/// since the replica last called `exec()` will be executed by invoking the
+/// supplied closure for each one of them.
 ///
-/// Accepts one type parameter; `T` defines the type of operations and their arguments
-/// that will go on the log and would typically be an enum class.
+/// Accepts one generic type parameter; `T` defines the type of operations and
+/// their arguments that will go on the log and would typically be an enum
+/// class.
 ///
-/// This struct is cache aligned to 64 bytes.
+/// This struct is aligned to 64 bytes optimizing cache access.\
+///
+/// # Note
+/// As a client, typically there is no need to call any methods on the Log aside
+/// from `new`. Only in the rare circumstance someone would implement their own
+/// Replica would it be necessary to call any of the Log's methods.
 #[repr(align(64))]
 pub struct Log<'a, T>
 where
@@ -148,22 +155,23 @@ where
     T: Sized + Clone,
 {
     /// Constructs and returns a log of size `bytes` bytes.
+    /// A size between 1-2 MiB usually works well in most cases.
     ///
     /// # Example
     ///
     /// ```
-    ///     use node_replication::log::Log;
+    /// use node_replication::Log;
     ///
-    ///     // Operation type that will go onto the log.
-    ///     #[derive(Clone)]
-    ///     enum Operation {
-    ///         Read,
-    ///         Write(u64),
-    ///         Invalid,
-    ///     }
+    /// // Operation type that will go onto the log.
+    /// #[derive(Clone)]
+    /// enum Operation {
+    ///     Read,
+    ///     Write(u64),
+    ///     Invalid,
+    /// }
     ///
-    ///     // Creates a 1 Mega Byte sized log.
-    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
+    /// // Creates a 1 Mega Byte sized log.
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024);
     /// ```
     ///
     /// This method also allocates memory for the log upfront. No further allocations
@@ -214,7 +222,7 @@ where
             }
         }
 
-        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = arr![Default::default(); 64];
+        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS] = arr![Default::default(); 192];
         for idx in 0..MAX_REPLICAS {
             fls[idx].set(true)
         }
@@ -227,7 +235,7 @@ where
             head: CachePadded::new(AtomicUsize::new(0usize)),
             tail: CachePadded::new(AtomicUsize::new(0usize)),
             ctail: CachePadded::new(AtomicUsize::new(0usize)),
-            ltails: arr![Default::default(); 64],
+            ltails: arr![Default::default(); 192],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
         }
@@ -238,30 +246,30 @@ where
         size_of::<Cell<Entry<T>>>()
     }
 
-    /// Registers a replica against the log. Returns an identifier that the replica
+    /// Registers a replica with the log. Returns an identifier that the replica
     /// can use to execute operations on the log.
     ///
     /// # Example
     ///
+    /// ```no-run
+    /// use node_replication::Log;
+    ///
+    /// // Operation type that will go onto the log.
+    /// #[derive(Clone)]
+    /// enum Operation {
+    ///    Read,
+    ///    Write(u64),
+    ///    Invalid,
+    /// }
+    ///
+    /// // Creates a 1 Mega Byte sized log.
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024);
+    ///
+    /// // Registers against the log. `idx` can now be used to append operations
+    /// // to the log, and execute these operations.
+    /// let idx = l.register().expect("Failed to register with the Log.");
     /// ```
-    ///     use node_replication::log::Log;
-    ///
-    ///     // Operation type that will go onto the log.
-    ///     #[derive(Clone)]
-    ///     enum Operation {
-    ///         Read,
-    ///         Write(u64),
-    ///         Invalid,
-    ///     }
-    ///
-    ///     // Creates a 1 Mega Byte sized log.
-    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
-    ///
-    ///     // Registers against the log. `idx` can now be used to append operations
-    ///     // to the log, and execute these operations.
-    ///     let idx = l.register().expect("Failed to register with the Log.");
-    /// ```
-    pub fn register(&self) -> Option<usize> {
+    pub(crate) fn register(&self) -> Option<usize> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
         loop {
             let n = self.next.load(Ordering::Relaxed);
@@ -283,45 +291,49 @@ where
     ///
     /// # Example
     ///
-    /// ```
-    ///     use node_replication::log::Log;
+    /// ```no-run
+    /// use node_replication::Log;
     ///
-    ///     // Operation type that will go onto the log.
-    ///     #[derive(Clone)]
-    ///     enum Operation {
-    ///         Read,
-    ///         Write(u64),
+    /// // Operation type that will go onto the log.
+    /// #[derive(Clone)]
+    /// enum Operation {
+    ///     Read,
+    ///     Write(u64),
+    /// }
+    ///
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024);
+    /// let idx = l.register().expect("Failed to register with the Log.");
+    ///
+    /// // The set of operations we would like to append. The order will
+    /// // be preserved by the interface.
+    /// let ops = [Operation::Write(100), Operation::Read];
+    ///
+    /// // `append()` might have to garbage collect the log. When doing so,
+    /// // it might encounter operations added in by another replica/thread.
+    /// // This closure allows us to consume those operations. `id` identifies
+    /// // the replica that added in those operations.
+    /// let f = |op: Operation, id: usize| {
+    ///     match(op) {
+    ///         Operation::Read => println!("Read by {}", id),
+    ///         Operation::Write(x) => println!("Write({}) by {}", x, id),
     ///     }
+    /// };
     ///
-    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
-    ///     let idx = l.register().expect("Failed to register with the Log.");
-    ///
-    ///     // The set of operations we would like to append. The order will
-    ///     // be preserved by the interface.
-    ///     let ops = [Operation::Write(100), Operation::Read];
-    ///
-    ///     // `append()` might have to garbage collect the log. When doing so,
-    ///     // it might encounter operations added in by another replica/thread.
-    ///     // This closure allows us to consume those operations. `id` identifies
-    ///     // the replica that added in those operations.
-    ///     let f = |op: Operation, id: usize| {
-    ///         match(op) {
-    ///             Operation::Read => println!("Read by {}", id),
-    ///             Operation::Write(x) => println!("Write({}) by {}", x, id),
-    ///         }
-    ///     };
-    ///
-    ///     // Append the operations. These operations will be marked with `idx`,
-    ///     // and will be linearized at the tail of the log.
-    ///     l.append(&ops, idx, f);
+    /// // Append the operations. These operations will be marked with `idx`,
+    /// // and will be linearized at the tail of the log.
+    /// l.append(&ops, idx, f);
     /// ```
     ///
-    /// If there isn't enough space
-    /// to perform the append, this method busy waits until the head is advanced.
-    /// Accepts a replica `idx`; all appended operations/entries will be marked
-    /// with this replica-identifier. Also accepts a closure `s`; when waiting for
-    /// GC, this closure is passed into exec() to ensure that this replica does'nt
-    /// cause a deadlock.
+    /// If there isn't enough space to perform the append, this method busy
+    /// waits until the head is advanced. Accepts a replica `idx`; all appended
+    /// operations/entries will be marked with this replica-identifier. Also
+    /// accepts a closure `s`; when waiting for GC, this closure is passed into
+    /// exec() to ensure that this replica does'nt cause a deadlock.
+    ///
+    /// # Note
+    /// Documentation for this function is hidden since `append` is currently not
+    /// intended as a public interface. It is marked as public due to being
+    /// used by the benchmarking code.
     #[inline(always)]
     pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) -> u64 {
         let nops = ops.len();
@@ -375,7 +387,7 @@ where
             let start = unsafe { x86::time::rdtsc() };
             if self
                 .tail
-                .compare_and_swap(tail, tail + nops, Ordering::SeqCst)
+                .compare_and_swap(tail, tail + nops, Ordering::Acquire)
                 != tail
             {
                 continue;
@@ -420,45 +432,45 @@ where
     ///
     /// # Example
     ///
-    /// ```
-    ///     use node_replication::log::Log;
+    /// ```no-run
+    /// use node_replication::Log;
     ///
-    ///     // Operation type that will go onto the log.
-    ///     #[derive(Clone)]
-    ///     enum Operation {
-    ///         Read,
-    ///         Write(u64),
+    /// // Operation type that will go onto the log.
+    /// #[derive(Clone)]
+    /// enum Operation {
+    ///     Read,
+    ///     Write(u64),
+    /// }
+    ///
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024);
+    /// let idx = l.register().expect("Failed to register with the Log.");
+    /// let ops = [Operation::Write(100), Operation::Read];
+    ///
+    /// let f = |op: Operation, id: usize| {
+    ///     match(op) {
+    ///         Operation::Read => println!("Read by {}", id),
+    ///         Operation::Write(x) => println!("Write({}) by {}", x, id),
     ///     }
+    /// };
+    /// l.append(&ops, idx, f);
     ///
-    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
-    ///     let idx = l.register().expect("Failed to register with the Log.");
-    ///     let ops = [Operation::Write(100), Operation::Read];
-    ///
-    ///     let f = |op: Operation, id: usize| {
-    ///         match(op) {
-    ///             Operation::Read => println!("Read by {}", id),
-    ///             Operation::Write(x) => println!("Write({}) by {}", x, id),
-    ///         }
-    ///     };
-    ///     l.append(&ops, idx, f);
-    ///
-    ///     // This closure is executed on every operation appended to the
-    ///     // since the last call to `exec()` by this replica/thread.
-    ///     let mut d = 0;
-    ///     let mut g = |op: Operation, id: usize| {
-    ///         match(op) {
-    ///             // The write happened before the read.
-    ///             Operation::Read => assert_eq!(100, d),
-    ///             Operation::Write(x) => d += 100,
-    ///         }
-    ///     };
-    ///     l.exec(idx, &mut g);
+    /// // This closure is executed on every operation appended to the
+    /// // since the last call to `exec()` by this replica/thread.
+    /// let mut d = 0;
+    /// let mut g = |op: Operation, id: usize| {
+    ///     match(op) {
+    ///         // The write happened before the read.
+    ///         Operation::Read => assert_eq!(100, d),
+    ///         Operation::Write(x) => d += 100,
+    ///     }
+    /// };
+    /// l.exec(idx, &mut g);
     /// ```
     ///
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     #[inline(always)]
-    pub fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
+    pub(crate) fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) -> usize {
         // Load the logical log offset from which we must execute operations.
         let l = self.ltails[idx - 1].load(Ordering::Relaxed);
 
@@ -466,7 +478,7 @@ where
         // global tail. If they're equal, then we're done here and can simply return.
         let t = self.tail.load(Ordering::Relaxed);
         if l == t {
-            return;
+            return 0;
         }
 
         let h = self.head.load(Ordering::Relaxed);
@@ -509,6 +521,8 @@ where
         // Also update this replica's local tail.
         self.ctail.fetch_max(t, Ordering::Relaxed);
         self.ltails[idx - 1].store(t, Ordering::Relaxed);
+
+        t - l
     }
 
     /// Returns a physical index given a logical index into the shared log.
@@ -576,6 +590,7 @@ where
     /// *To be used for testing/benchmarking only, hence marked unsafe*. Before calling
     /// this method, please make sure that there aren't any replicas/threads actively
     /// issuing/executing operations to/from this log.
+    #[doc(hidden)]
     #[inline(always)]
     pub unsafe fn reset(&self) {
         // First, reset global metadata.
@@ -603,60 +618,66 @@ where
     ///
     /// # Example
     ///
-    /// ```
-    ///     use node_replication::log::Log;
+    /// ```no-run
+    /// use node_replication::Log;
     ///
-    ///     // Operation type that will go onto the log.
-    ///     #[derive(Clone)]
-    ///     enum Operation {
-    ///         Read,
-    ///         Write(u64),
+    /// // Operation type that will go onto the log.
+    /// #[derive(Clone)]
+    /// enum Operation {
+    ///     Read,
+    ///     Write(u64),
+    /// }
+    ///
+    /// // We register two replicas here, `idx1` and `idx2`.
+    /// let l = Log::<Operation>::new(1 * 1024 * 1024);
+    /// let idx1 = l.register().expect("Failed to register with the Log.");
+    /// let idx2 = l.register().expect("Failed to register with the Log.");
+    /// let ops = [Operation::Write(100), Operation::Read];
+    ///
+    /// let f = |op: Operation, id: usize| {
+    ///     match(op) {
+    ///         Operation::Read => println!("Read by {}", id),
+    ///         Operation::Write(x) => println!("Write({}) by {}", x, id),
     ///     }
+    /// };
+    /// l.append(&ops, idx2, f);
     ///
-    ///     // We register two replicas here, `idx1` and `idx2`.
-    ///     let l = Log::<Operation>::new(1 * 1024 * 1024);
-    ///     let idx1 = l.register().expect("Failed to register with the Log.");
-    ///     let idx2 = l.register().expect("Failed to register with the Log.");
-    ///     let ops = [Operation::Write(100), Operation::Read];
+    /// let mut d = 0;
+    /// let mut g = |op: Operation, id: usize| {
+    ///     match(op) {
+    ///         // The write happened before the read.
+    ///         Operation::Read => assert_eq!(100, d),
+    ///         Operation::Write(x) => d += 100,
+    ///     }
+    /// };
+    /// l.exec(idx2, &mut g);
     ///
-    ///     let f = |op: Operation, id: usize| {
-    ///         match(op) {
-    ///             Operation::Read => println!("Read by {}", id),
-    ///             Operation::Write(x) => println!("Write({}) by {}", x, id),
-    ///         }
-    ///     };
-    ///     l.append(&ops, idx2, f);
+    /// // This assertion fails because `idx1` has not executed operations
+    /// // that were appended by `idx2`.
+    /// assert_eq!(false, l.is_replica_synced_for_reads(idx1, l.get_ctail()));
     ///
-    ///     let mut d = 0;
-    ///     let mut g = |op: Operation, id: usize| {
-    ///         match(op) {
-    ///             // The write happened before the read.
-    ///             Operation::Read => assert_eq!(100, d),
-    ///             Operation::Write(x) => d += 100,
-    ///         }
-    ///     };
-    ///     l.exec(idx2, &mut g);
+    /// let mut e = 0;
+    /// let mut g = |op: Operation, id: usize| {
+    ///     match(op) {
+    ///         // The write happened before the read.
+    ///         Operation::Read => assert_eq!(100, e),
+    ///         Operation::Write(x) => e += 100,
+    ///     }
+    /// };
+    /// l.exec(idx1, &mut g);
     ///
-    ///     // This assertion fails because `idx1` has not executed operations
-    ///     // that were appended by `idx2`.
-    ///     assert_eq!(false, l.is_replica_synced_for_reads(idx1));
-    ///
-    ///     let mut e = 0;
-    ///     let mut g = |op: Operation, id: usize| {
-    ///         match(op) {
-    ///             // The write happened before the read.
-    ///             Operation::Read => assert_eq!(100, e),
-    ///             Operation::Write(x) => e += 100,
-    ///         }
-    ///     };
-    ///     l.exec(idx1, &mut g);
-    ///
-    ///     // `idx1` is all synced up, so this assertion passes.
-    ///     assert_eq!(true, l.is_replica_synced_for_reads(idx1));
+    /// // `idx1` is all synced up, so this assertion passes.
+    /// assert_eq!(true, l.is_replica_synced_for_reads(idx1, l.get_ctail()));
     /// ```
     #[inline(always)]
-    pub fn is_replica_synced_for_reads(&self, idx: usize) -> bool {
-        self.ltails[idx - 1].load(Ordering::Relaxed) >= self.ctail.load(Ordering::Relaxed)
+    pub(crate) fn is_replica_synced_for_reads(&self, idx: usize, ctail: usize) -> bool {
+        self.ltails[idx - 1].load(Ordering::Relaxed) >= ctail
+    }
+
+    /// This method returns the current ctail value for the log.
+    #[inline(always)]
+    pub(crate) fn get_ctail(&self) -> usize {
+        self.ctail.load(Ordering::Relaxed)
     }
 }
 
@@ -728,9 +749,9 @@ mod tests {
     // Tests if a small log can be correctly constructed.
     #[test]
     fn test_log_create() {
-        let l = Log::<Operation>::new(512 * 1024);
-        let n = (512 * 1024) / Log::<Operation>::entry_size();
-        assert_eq!(l.rawb, 512 * 1024);
+        let l = Log::<Operation>::new(1024 * 1024);
+        let n = (1024 * 1024) / Log::<Operation>::entry_size();
+        assert_eq!(l.rawb, 1024 * 1024);
         assert_eq!(l.size, n);
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
@@ -792,8 +813,8 @@ mod tests {
     // Tests if we can correctly index into the shared log.
     #[test]
     fn test_log_index() {
-        let l = Log::<Operation>::new(512 * 1024);
-        assert_eq!(l.index(9000), 808);
+        let l = Log::<Operation>::new(2 * 1024 * 1024);
+        assert_eq!(l.index(99000), 696);
     }
 
     // Tests if we can correctly register with the shared log.
@@ -888,7 +909,7 @@ mod tests {
         };
 
         l.next.store(2, Ordering::Relaxed);
-        l.head.store(8192, Ordering::Relaxed);
+        l.head.store(2 * 8192, Ordering::Relaxed);
         l.tail.store(l.size - 10, Ordering::Relaxed);
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
@@ -993,7 +1014,7 @@ mod tests {
 
         l.append(&o, 1, |_o: Operation, _i: usize| {}); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
-        l.head.store(8192, Ordering::SeqCst);
+        l.head.store(2 * 8192, Ordering::SeqCst);
         l.tail.store(l.size - 10, Ordering::SeqCst);
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
@@ -1054,6 +1075,36 @@ mod tests {
         assert_eq!(Arc::strong_count(&o2[0]), 3);
     }
 
+    // Tests that operations are cloned when added to the log, and that
+    // they are correctly dropped once overwritten after the GC.
+    #[test]
+    fn test_log_refcount_change_with_gc() {
+        let entry_size = 64;
+        let total_entries = 16384;
+
+        assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
+        let size: usize = total_entries * entry_size;
+        let l = Log::<Arc<Operation>>::new(size);
+        let o1 = [Arc::new(Operation::Read)];
+        let o2 = [Arc::new(Operation::Read)];
+        assert_eq!(Arc::strong_count(&o1[0]), 1);
+        assert_eq!(Arc::strong_count(&o2[0]), 1);
+
+        for i in 1..(total_entries + 1) {
+            l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
+            assert_eq!(Arc::strong_count(&o1[0]), i + 1);
+        }
+        assert_eq!(Arc::strong_count(&o1[0]), total_entries + 1);
+
+        for i in 1..(total_entries + 1) {
+            l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
+            assert_eq!(Arc::strong_count(&o1[0]), (total_entries + 1) - i);
+            assert_eq!(Arc::strong_count(&o2[0]), i + 1);
+        }
+        assert_eq!(Arc::strong_count(&o1[0]), 1);
+        assert_eq!(Arc::strong_count(&o2[0]), total_entries + 1);
+    }
+
     // Tests that is_replica_synced_for_read() works correctly; it returns
     // false when a replica is not synced up and true when it is.
     #[test]
@@ -1073,10 +1124,10 @@ mod tests {
 
         l.append(&o, one, |_o: Operation, _i: usize| {});
         l.exec(one, &mut f);
-        assert_eq!(l.is_replica_synced_for_reads(one), true);
-        assert_eq!(l.is_replica_synced_for_reads(two), false);
+        assert_eq!(l.is_replica_synced_for_reads(one, l.get_ctail()), true);
+        assert_eq!(l.is_replica_synced_for_reads(two, l.get_ctail()), false);
 
         l.exec(two, &mut f);
-        assert_eq!(l.is_replica_synced_for_reads(two), true);
+        assert_eq!(l.is_replica_synced_for_reads(two, l.get_ctail()), true);
     }
 }

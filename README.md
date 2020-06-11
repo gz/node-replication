@@ -1,167 +1,135 @@
 # node-replication
 
-[![pipeline status](https://gitlab.com/gz1/node-replication/badges/master/pipeline.svg)](https://gitlab.com/gz1/node-replication/commits/master)
-
-Rust implementation of Node Replication. [Black-box Concurrent Data Structures
-for NUMA Architectures](https://dl.acm.org/citation.cfm?id=3037721) published
-at ASPLOS 2017
+Node Replication library based on [Black-box Concurrent Data Structures for NUMA
+Architectures](https://dl.acm.org/citation.cfm?id=3037721).
 
 This library can be used to implement a concurrent version of any single
-threaded data structure. It takes in a single threaded implementation of said
-data structure, and scales it out to multiple cores and NUMA nodes using an
-operation log.
+threaded data structure: It takes in a single threaded implementation of said
+data structure, and scales it out to multiple cores and NUMA nodes by combining
+three techniques: readers-writer locks, operation logging and flat combining.
 
-The code should be treated as experimental and work in progress, there may be
-correctness and performance bugs.
+## How does it work
+
+To replicate a single-threaded data structure, one needs to implement `Dispatch`
+(from node-replication). As an example, we implement `Dispatch` for the
+single-threaded HashMap from `std`.
+
+```rust
+/// The node-replicated hashmap uses a std hashmap internally.
+#[derive(Default)]
+struct NrHashMap {
+    storage: HashMap<u64, u64>,
+}
+
+/// We support mutable put operation on the hashmap.
+#[derive(Clone, Debug, PartialEq)]
+enum Modify {
+    Put(u64, u64),
+}
+
+/// We support an immutable read operation to lookup a key from the hashmap.
+#[derive(Clone, Debug, PartialEq)]
+enum Access {
+    Get(u64),
+}
+
+/// The Dispatch traits executes `ReadOperation` (our Access enum)
+/// and `WriteOperation` (our `Modify` enum) against the replicated
+/// data-structure.
+impl Dispatch for NrHashMap {
+    type ReadOperation = Access;
+    type WriteOperation = Modify;
+    type Response = Option<u64>;
+
+    /// The `dispatch` function applies the immutable operations.
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+        match op {
+            Access::Get(key) => self.storage.get(&key).map(|v| *v),
+        }
+    }
+
+    /// The `dispatch_mut` function applies the mutable operations.
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
+        match op {
+            Modify::Put(key, value) => self.storage.insert(key, value),
+        }
+    }
+}
+```
+
+The full example (using `HashMap` as the underlying data-structure) can be found
+[here](examples/hashmap.rs). To run, execute: `cargo run --example hashmap`
+
+## How does it perform
+
+The library often makes your single-threaded implementation work better than, or
+competitive with fine-grained locking or lock free implementations of the same
+data-structure.
+
+It works especially well if
+
+- Your data-structure exceeds the L3 cache-size of your system (you may not see
+  any gain from replication if your data can always remain in the cache).
+- All your threads need to issue mixed, mutable and immutable operations (if
+  not alternative techniques like RCU may work better).
+- You have enough DRAM to take advantage of the replication (i.e., it's
+  typically best to use one replica per-NUMA node which means your original
+  memory foot-print is multiplied with the amount of NUMA nodes in the system).
+
+As an example, the following benchmark uses Rust' the hash-table with the
+`Dispatch` implementation from above (`nr`), and compares it against concurrent
+hash table implementations from [crates.io](https://crates.io) (chashmap,
+dashmap, flurry), a HashMap protected by an `RwLock` (`std`), and
+[urcu](https://liburcu.org/).
+
+<table>
+  <tr>
+    <td valign="top"><a href="/benches/graphs/skylake4x-throughput-vs-cores.png?raw=true">
+    <img src="/benches/graphs/skylake4x-throughput-vs-cores.png?raw=true" alt="Throughput of node-replicated HT" />
+</a></td>
+    <td valign="top"><a href="/benches/graphs/skylake4x-throughput-vs-cores.png?raw=true">
+    <img src="/benches/graphs/skylake4x-throughput-vs-wr.png?raw=true" alt="Different write ratios with 196 threads" /></td>
+  </tr>
+</table>
+
+The figures show a benchmark using hash tables pre-filled with 67M entires (8
+byte keys and values) and uses a uniform key distribution for operations. On the
+left graphs, different write ratios (0%, 10% and 80%) are shown. On the right
+graph, we vary the write ratio (x-axis) with 192 threads. The system has 4 NUMA
+nodes, so it uses 4 replicas (at `x=96`, a replica gets added every 24 cores).
+After `x=96`, the remaining hyper-threads are used.
 
 ## Compile the library
 
-The library should compile with a stable rust compiler. The code supports
-`no_std` as well.
+The library currently requires a nightly rust compiler (due to the use of
+`new_uninit`, and `get_mut_unchecked`, `negative_impls` API). The library works
+with `no_std`.
 
-```
-$ cargo build
-```
-
-As a dependency in your Cargo.toml:
-
-```
-node-replication = "0.0.1"
-```
-
-### Compile benchmark and tests
-
-Running the tests, examples and benchmarks requires the use of a nightly rust
-compiler:
-
-```
+```bash
 rustup toolchain install nightly
 rustup default nightly
+cargo build
 ```
 
-In addition the a few system libraries are required to be present on your
-system.
+As a dependency in your `Cargo.toml`:
 
-#### Install Benchmark/Test dependencies Ubuntu
-
-```
-$ apt-get install libhwloc-dev gnuplot pkg-config libfuse-dev liburcu-dev liburcu6 clang r-base r-cran-plyr r-cran-ggplot2
+```toml
+node-replication = "*"
 ```
 
-#### Install Benchmark/Test dependencies on MacOS
-
-```
-$ brew install gnuplot hwloc
-```
-
-hashbench compares against URCU (user-space RCU). For MacOS the easiest
-way is to install it from the sources:
-
-```
-$ git clone git://git.liburcu.org/userspace-rcu.git
-$ userspace-rcu
-$ git checkout v.0.11.0
-$ ./bootstrap
-$ ./configure --build=x86_64-apple-darwin11
-$ make
-$ make install
-```
-
-The memfs benchmarks depends on btfs which uses FUSE. The easiest way to
-install FUSE for MacOS is through downloading the packages on
-[osxfuse](https://osxfuse.github.io/).
+The code should currently be treated as an early release and is still work in
+progress. In its current form, the library is only known to work on x86
+platforms (other platforms will require some changes and are untested).
 
 ## Testing
 
 There are a series of unit tests as part of the implementation and a few
-[integration tests](./tests) that verify the correctness of the implementation
+[integration tests](./tests) that check various aspects of the implementation
 using a stack.
 
 You can run the tests by executing: `cargo test`
 
-## Examples
-
-### Stack [[src](examples/stack.rs)]
-
-A working example of a replicated stack. To run the example execute: `cargo run
---example stack`
-
 ## Benchmarks
 
-Executing `cargo bench` will run many benchmarks (described in more detail in
-the following subsections) to evaluate the performance of the library. The code
-is located in the `benches` folder.
-
-Please ensure to always set `RUST_TEST_THREADS=1` in your environment for
-benchmarking since the scale-out benchmarks will spawn multiple threads
-internally that can utilize the entire machine for certain runs.
-
-Note: Running all benchmarks may take hours, depending on the system!
-
-### Log append [[benchmark](benches/log.rs)]
-
-A benchmark that evaluates the append performance (in terms of throughput
-ops/s) of the log by varying the batch size and the amount of threads
-contending on the log. This gives you the maximum of operations that are
-theoretically possible (if we are ignoring the overhead of synchronization
-within a replica).
-
-To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench log`
-
-### Stack [[benchmark](benches/stack.rs)]
-
-One benchmark that evaluates the COST (overhead of added synchronization) by
-comparing a node-replicated stack against a single-threaded stack (without a
-log/replica), and a benchmark that evaluates the scalability of the stack by
-running with increasing amounts of threads.
-
-To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench stack`
-
-### Hash-map [[benchmark](benches/hashmap.rs)]
-
-A benchmark that evaluates the COST (overhead of added synchronization) by
-comparing a node-replicated hash-map against a single-threaded hash-map (without a
-log/replica), and a benchmark that evaluates the scalability of the hash-map by
-running with increasing amounts of threads.
-
-To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench hashmap`
-
-### Synthetic data-structure [[benchmark](benches/synthetic.rs)]
-
-A benchmark to evaluates the performance of the NR library by using a
-configurable cache-model and access-pattern for an abstract data-structure that
-is replicated by the library.
-
-Again the code contains two sets of benchmarks to (a) compare the overhead of
-added synchronization and (b) evaluate the scalability of the synthetic
-data-structure. All benchmarks report throughput in ops/s.
-
-To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench synthetic`
-
-### VSpace [[benchmark](benches/vspace.rs)]
-
-A benchmark to evaluate the performance of the NR library for address-space
-replication (using an x86-64 4-level address space layout).
-
-To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench vspace`
-
-### MemFS [[benchmark](benches/memfs.rs)]
-
-A benchmark to evaluate the performance of the NR library for file-system like
-operations, by using a very simple in-memory file-system ([btfs](https://crates.io/crates/btfs)).
-
-To run these benchmarks execute:
-`RUST_TEST_THREADS=1 cargo bench --bench memfs`
-
-### Hashbench [[benchmark](benches/hashbench.rs)]
-
-A benchmark to compare various concurrent Hashtables (originally
-from [evmap](https://github.com/jonhoo/rust-evmap)).
-
-Use `RUST_TEST_THREADS=1 cargo bench --bench hashbench -- --help` to see an
-overview of supported configuration.
+The benchmarks (and how to execute them) are explained in more detail in the
+[benches](benches/README.md) folder.

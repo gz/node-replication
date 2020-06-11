@@ -2,7 +2,11 @@ stages:
   - build
   - test
   - bench
-  - deploy
+
+before_script:
+  - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
+  - eval $(ssh-agent -s)
+  - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
 
 build:
   stage: build
@@ -10,17 +14,19 @@ build:
     # Dependency for node-replication
     - sudo apt install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6 pkg-config --yes
     - cargo build
+
 test:
   stage: test
   script:
-    #- cargo +nightly fmt -- --check
+    - cargo +nightly fmt -- --check
     - timeout 1h cargo test
+    - cargo bench --no-run
   dependencies:
     - build
   variables:
-    GIT_STRATEGY: none
+    GIT_STRATEGY: fetch
 
-bench:
+benchmark:skylake2x:
   stage: bench
   script:
   # - RUST_TEST_THREADS=1 RUST_LOG=info timeout 4h cargo bench --bench hashmap
@@ -29,11 +35,12 @@ bench:
   dependencies:
     - test
   variables:
-    GIT_STRATEGY: none
+    GIT_STRATEGY: fetch
+  tags:
+    - skylake2x
 
-# Deploy the benchmark go gh-pages:
-deploy:
-  stage: deploy
+benchmark:skylake4x:
+  stage: bench
   script:
     - cat output.csv | grep "INFO" | tee -a stall.csv
     - rm output.csv
@@ -66,6 +73,8 @@ deploy:
     - cd ..
     - rm -rf gh-pages
   dependencies:
-    - bench
+    - test
   variables:
-    GIT_STRATEGY: none
+    GIT_STRATEGY: fetch
+  tags:
+    - skylake4x

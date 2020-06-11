@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A in-memory FS benchmark.
@@ -7,24 +7,19 @@
 use std::ffi::OsStr;
 use std::sync::Arc;
 
+use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
+use log::warn;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 
 mod mkbench;
 mod utils;
 
-use log::warn;
 use node_replication::Dispatch;
-
-use btfs::{Error, FileAttr, FileType, InodeId, MemFilesystem, SetAttrRequest};
+use node_replication::Replica;
 
 use utils::benchmark::*;
 use utils::Operation;
-
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 /// All FS operations we can perform through the log.
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -105,18 +100,6 @@ pub enum Response {
 impl Default for Response {
     fn default() -> Response {
         Response::Empty
-    }
-}
-
-/// Potential errors from the file-system
-#[derive(Copy, Clone, Debug)]
-pub enum ResponseError {
-    Err(Error),
-}
-
-impl Default for ResponseError {
-    fn default() -> ResponseError {
-        ResponseError::Err(Error::NoEntry)
     }
 }
 
@@ -211,26 +194,22 @@ impl NrMemFilesystem {
 impl Dispatch for NrMemFilesystem {
     type ReadOperation = ();
     type WriteOperation = OperationWr;
-    type Response = Response;
-    type ResponseError = ResponseError;
+    type Response = Result<Response, Error>;
 
-    fn dispatch(&self, _op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
         unreachable!()
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OperationWr::GetAttr { ino } => match self.getattr(ino) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::SetAttr { ino, new_attrs } => match self.setattr(ino, new_attrs) {
                 Ok(fattr) => Ok(Response::Attr(*fattr)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::ReadDir { ino, fh, offset } => {
                 match self.readdir(ino, fh) {
@@ -243,20 +222,20 @@ impl Dispatch for NrMemFilesystem {
                             entries.into_iter().skip(to_skip).collect();
                         Ok(Response::Directory)
                     }
-                    Err(e) => Err(ResponseError::Err(e)),
+                    Err(e) => Err(e),
                 }
             }
             OperationWr::Lookup { parent, name } => match self.lookup(parent, name) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::RmDir { parent, name } => match self.rmdir(parent, name) {
                 Ok(()) => Ok(Response::Empty),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::MkDir { parent, name, mode } => match self.mkdir(parent, name, mode) {
                 Ok(attr) => Ok(Response::Attr(*attr)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Open { ino, flags } => {
                 warn!("Don't do `open` for now... {} {}", ino, flags);
@@ -264,7 +243,7 @@ impl Dispatch for NrMemFilesystem {
             }
             OperationWr::Unlink { parent, name } => match self.unlink(parent, name) {
                 Ok(_attr) => Ok(Response::Empty),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Create {
                 parent,
@@ -273,7 +252,7 @@ impl Dispatch for NrMemFilesystem {
                 flags,
             } => match self.create(parent, name, mode, flags) {
                 Ok(_attr) => Ok(Response::Empty),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Write {
                 ino,
@@ -283,7 +262,7 @@ impl Dispatch for NrMemFilesystem {
                 flags,
             } => match self.write(ino, fh, offset, data, flags) {
                 Ok(written) => Ok(Response::Written(written)),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Read {
                 ino,
@@ -297,7 +276,7 @@ impl Dispatch for NrMemFilesystem {
                     let bytes_as_vec = Arc::new(slice.to_vec());
                     Ok(Response::Data(bytes_as_vec))
                 }
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
             OperationWr::Rename {
                 parent,
@@ -306,7 +285,7 @@ impl Dispatch for NrMemFilesystem {
                 newname,
             } => match self.rename(parent, name, newparent, newname) {
                 Ok(()) => Ok(Response::Empty),
-                Err(e) => Err(ResponseError::Err(e)),
+                Err(e) => Err(e),
             },
         }
     }
@@ -348,7 +327,7 @@ fn memfs_single_threaded(c: &mut TestHarness) {
     const WRITE_RATIO: usize = 10; //% out of 100
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
-    mkbench::baseline_comparison::<NrMemFilesystem>(c, "memfs", ops, LOG_SIZE_BYTES);
+    mkbench::baseline_comparison::<Replica<NrMemFilesystem>>(c, "memfs", ops, LOG_SIZE_BYTES);
 }
 
 /// Compare scale-out behaviour of memfs.
@@ -358,7 +337,7 @@ fn memfs_scale_out(c: &mut TestHarness) {
 
     let ops = generate_fs_operations(NOP, WRITE_RATIO);
 
-    mkbench::ScaleBenchBuilder::<NrMemFilesystem>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<NrMemFilesystem>>::new(ops)
         .machine_defaults()
         // The only benchmark that actually seems to slightly
         // regress with 2 MiB logsize, set to 16 MiB
@@ -366,12 +345,12 @@ fn memfs_scale_out(c: &mut TestHarness) {
         .configure(
             c,
             "memfs-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
+            |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
-                    replica.execute_ro(*o, rid).unwrap();
+                    replica.execute(*o, rid).unwrap();
                 }
                 Operation::WriteOperation(o) => {
-                    replica.execute(*o, rid).unwrap();
+                    replica.execute_mut(*o, rid).unwrap();
                 }
             },
         );

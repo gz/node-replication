@@ -1,99 +1,78 @@
 // Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! A minimal example that implements a replicated stack
+//! A minimal example that implements a replicated hashmap
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use node_replication::Dispatch;
 use node_replication::Log;
 use node_replication::Replica;
 
-/// We support mutable push and pop operations on the stack.
+/// The node-replicated hashmap uses a std hashmap internally.
+#[derive(Default)]
+struct NrHashMap {
+    storage: HashMap<u64, u64>,
+}
+
+/// We support mutable put operation on the hashmap.
 #[derive(Clone, Debug, PartialEq)]
 enum Modify {
-    Push(u32),
-    Pop,
+    Put(u64, u64),
 }
 
-/// We support an immutable read operation to peek the stack.
+/// We support an immutable read operation to lookup a key from the hashmap.
 #[derive(Clone, Debug, PartialEq)]
 enum Access {
-    Peek,
-}
-
-/// The actual stack, it uses a single-threaded Vec.
-struct Stack {
-    storage: Vec<u32>,
-}
-
-impl Default for Stack {
-    /// The stack Default implementation, as it is
-    /// executed for every Replica.
-    ///
-    /// This should be deterministic as it is used to create multiple instances
-    /// of a Stack for every replica.
-    fn default() -> Stack {
-        const DEFAULT_STACK_SIZE: u32 = 1_000u32;
-
-        let mut s = Stack {
-            storage: Default::default(),
-        };
-
-        for e in 0..DEFAULT_STACK_SIZE {
-            s.storage.push(e);
-        }
-
-        s
-    }
+    Get(u64),
 }
 
 /// The Dispatch traits executes `ReadOperation` (our Access enum)
 /// and `WriteOperation` (our `Modify` enum) against the replicated
 /// data-structure.
-impl Dispatch for Stack {
+impl Dispatch for NrHashMap {
     type ReadOperation = Access;
     type WriteOperation = Modify;
-    type Response = Option<u32>;
+    type Response = Option<u64>;
 
     /// The `dispatch` function applies the immutable operations.
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
-            Access::Peek => self.storage.last().cloned(),
+            Access::Get(key) => self.storage.get(&key).map(|v| *v),
         }
     }
 
     /// The `dispatch_mut` function applies the mutable operations.
     fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
-            Modify::Push(v) => {
-                self.storage.push(v);
-                return None;
-            }
-            Modify::Pop => return self.storage.pop(),
+            Modify::Put(key, value) => self.storage.insert(key, value),
         }
     }
 }
 
-/// We initialize a log, and two replicas for a stack, register with the replica
+/// We initialize a log, and two replicas for a hashmap, register with the replica
 /// and then execute operations.
 fn main() {
     // The operation log for storing `WriteOperation`, it has a size of 2 MiB:
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
+    let log = Arc::new(Log::<<NrHashMap as Dispatch>::WriteOperation>::new(
         2 * 1024 * 1024,
     ));
 
-    // Next, we create two replicas of the stack
-    let replica1 = Replica::<Stack>::new(&log);
-    let replica2 = Replica::<Stack>::new(&log);
+    // Next, we create two replicas of the hashmap
+    let replica1 = Replica::<NrHashMap>::new(&log);
+    let replica2 = Replica::<NrHashMap>::new(&log);
 
     // The replica executes a Modify or Access operations by calling
     // `execute_mut` and `execute`. Eventually they end up in the `Dispatch` trait.
-    let thread_loop = |replica: &Arc<Replica<Stack>>, ridx| {
+    let thread_loop = |replica: &Arc<Replica<NrHashMap>>, ridx| {
         for i in 0..2048 {
-            let _r = match i % 3 {
-                0 => replica.execute_mut(Modify::Push(i as u32), ridx),
-                1 => replica.execute_mut(Modify::Pop, ridx),
-                2 => replica.execute(Access::Peek, ridx),
+            let _r = match i % 2 {
+                0 => replica.execute_mut(Modify::Put(i, i + 1), ridx),
+                1 => {
+                    let response = replica.execute(Access::Get(i - 1), ridx);
+                    assert_eq!(response, Some(i));
+                    response
+                }
                 _ => unreachable!(),
             };
         }
@@ -101,9 +80,8 @@ fn main() {
 
     // Finally, we spawn three threads that issue operations, thread 1 and 2
     // will use replica1 and thread 3 will use replica 2:
-    let replica11 = replica1.clone();
-
     let mut threads = Vec::with_capacity(3);
+    let replica11 = replica1.clone();
     threads.push(std::thread::spawn(move || {
         let ridx = replica11.register().expect("Unable to register with log");
         thread_loop(&replica11, ridx);

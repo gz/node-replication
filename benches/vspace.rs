@@ -1,4 +1,4 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Evaluates a virtual address space implementation using node-replication.
@@ -15,16 +15,12 @@ use rand::{thread_rng, Rng};
 use x86::bits64::paging::*;
 
 use node_replication::Dispatch;
+use node_replication::Replica;
 
 mod mkbench;
 mod utils;
 use utils::benchmark::*;
 use utils::Operation;
-
-extern crate jemallocator;
-
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 fn kernel_vaddr_to_paddr(v: VAddr) -> PAddr {
     let vaddr_val: usize = v.into();
@@ -503,10 +499,9 @@ struct VSpaceDispatcher {
 impl Dispatch for VSpaceDispatcher {
     type ReadOperation = OpcodeRd;
     type WriteOperation = OpcodeWr;
-    type Response = (u64, u64);
-    type ResponseError = VSpaceError;
+    type Response = Result<(u64, u64), VSpaceError>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
         match op {
             OpcodeRd::Identify(base) => {
                 let paddr = self.vspace.resolve_addr(VAddr::from(base));
@@ -515,10 +510,7 @@ impl Dispatch for VSpaceDispatcher {
         }
     }
 
-    fn dispatch_mut(
-        &mut self,
-        op: Self::WriteOperation,
-    ) -> Result<Self::Response, Self::ResponseError> {
+    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpcodeWr::Map(vbase, length, rights, pbase) => {
                 let (retaddr, len) = self.vspace.map_new(vbase, length, rights, pbase)?;
@@ -564,7 +556,7 @@ fn generate_operations(nop: usize) -> Vec<Operation<OpcodeRd, OpcodeWr>> {
 fn vspace_single_threaded(c: &mut TestHarness) {
     const NOP: usize = 3000;
     const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
-    mkbench::baseline_comparison::<VSpaceDispatcher>(
+    mkbench::baseline_comparison::<Replica<VSpaceDispatcher>>(
         c,
         "vspace",
         generate_operations(NOP),
@@ -576,17 +568,17 @@ fn vspace_scale_out(c: &mut TestHarness) {
     const NOP: usize = 3000;
     let ops = generate_operations(NOP);
 
-    mkbench::ScaleBenchBuilder::<VSpaceDispatcher>::new(ops)
+    mkbench::ScaleBenchBuilder::<Replica<VSpaceDispatcher>>::new(ops)
         .machine_defaults()
         .configure(
             c,
             "vspace-scaleout",
-            |_cid, rid, _log, replica, op, _batch_size, _direct| match op {
+            |_cid, rid, _log, replica, op, _batch_size| match op {
                 Operation::ReadOperation(o) => {
-                    let _r = replica.execute_ro(*o, rid);
+                    let _r = replica.execute(*o, rid);
                 }
                 Operation::WriteOperation(o) => {
-                    let _r = replica.execute(*o, rid);
+                    let _r = replica.execute_mut(*o, rid);
                 }
             },
         );

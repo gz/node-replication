@@ -1,5 +1,11 @@
-// Copyright © 2019 VMware, Inc. All Rights Reserved.
+// Copyright © VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! The distributed readers-writer lock used by the replica.
+//!
+//! This module is only public since it needs to be exposed to the benchmarking
+//! code. For clients there is no need to rely on this directly, as the RwLock
+//! is embedded inside the Replica.
 
 use core::cell::UnsafeCell;
 use core::default::Default;
@@ -9,7 +15,7 @@ use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
 use crossbeam_utils::CachePadded;
 
 /// Maximum number of reader threads that this lock supports.
-const MAX_READER_THREADS: usize = 128;
+const MAX_READER_THREADS: usize = 192;
 const_assert!(MAX_READER_THREADS > 0);
 
 /// A scalable reader-writer lock.
@@ -63,7 +69,7 @@ where
 
         RwLock {
             wlock: CachePadded::new(AtomicBool::new(false)),
-            rlock: arr![Default::default(); 128],
+            rlock: arr![Default::default(); 192],
             data: UnsafeCell::new(T::default()),
         }
     }
@@ -142,15 +148,17 @@ where
         loop {
             // First, wait until the write lock is free. This is the small
             // optimization spoken of earlier.
-            while *ptr {
-                spin_loop_hint();
+            unsafe {
+                while core::ptr::read_volatile(ptr) {
+                    spin_loop_hint();
+                }
             }
 
             // Next, acquire this thread's read lock and actually check if the write lock
             // is free. If it is, then we're good to go because any new writers will now
             // see this acquired read lock and block. If it isn't free, then we got unlucky;
             // release the read lock and retry.
-            self.rlock[tid].fetch_add(1, Ordering::SeqCst);
+            self.rlock[tid].fetch_add(1, Ordering::Acquire);
             if !self.wlock.load(Ordering::Relaxed) {
                 break;
             }

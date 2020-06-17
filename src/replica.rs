@@ -9,7 +9,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use arr_macro::arr;
-use crossbeam_utils::CachePadded;
+use crossbeam_utils::{Backoff, CachePadded};
 
 use super::context::Context;
 use super::log::Log;
@@ -113,7 +113,7 @@ where
 
     /// Stores the stall cycles when different threads are run simultenously.
     #[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
-    stall: CachePadded<RefCell<Vec<u64>>>,
+    stall: CachePadded<RefCell<Vec<(usize, u64)>>>,
 
     #[cfg(any(feature = "combiner-stall", feature = "log-stall"))]
     executed: CachePadded<RefCell<Vec<usize>>>,
@@ -507,6 +507,7 @@ where
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
     fn try_combine(&self, tid: usize) {
+        let backoff = Backoff::new();
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         #[cfg(feature = "combiner-stall")]
@@ -520,22 +521,24 @@ where
                 )
             } != 0
             {
+                backoff.spin();
                 return;
             };
         }
 
         // Try to become the combiner here. If this fails, then simply return.
         if self.combiner.compare_and_swap(0, tid, Ordering::Acquire) != 0 {
+            backoff.spin();
             return;
         }
         #[cfg(feature = "combiner-stall")]
         if self.stall.borrow().len() < STALL_COUNTS {
             let diff = unsafe { x86::time::rdtsc() } - start;
-            self.stall.borrow_mut().push(diff);
+            self.stall.borrow_mut().push((tid, diff));
         }
 
         // Successfully became the combiner; perform one round of flat combining.
-        self.combine();
+        self.combine(tid);
 
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
@@ -545,7 +548,7 @@ where
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
-    fn combine(&self) {
+    fn combine(&self, tid: usize) {
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         let mut results = self.result.borrow_mut();
@@ -572,7 +575,7 @@ where
             let _cas_time = self.slog.append(&buffer, self.idx, f);
             #[cfg(feature = "log-stall")]
             if self.stall.borrow().len() < STALL_COUNTS {
-                self.stall.borrow_mut().push(_cas_time);
+                self.stall.borrow_mut().push((tid, _cas_time));
             }
         }
 
@@ -613,23 +616,25 @@ where
     D: Sized + Default + Sync + Dispatch,
 {
     fn drop(&mut self) {
-        self.stall.borrow_mut().sort();
+        self.stall
+            .borrow_mut()
+            .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         let len = self.stall.borrow().len();
 
         self.executed.borrow_mut().sort();
         let exec_len = self.stall.borrow().len();
 
         if len > 0 && exec_len > 0 {
-            let min = self.stall.borrow()[0];
-            let median = self.stall.borrow()[len / 2];
-            let tail = self.stall.borrow()[(len * 98) / 100];
+            let min = self.stall.borrow()[0].1;
+            let median = self.stall.borrow()[len / 2].1;
+            let tail = self.stall.borrow()[(len * 98) / 100].1;
 
             let exec_min = self.executed.borrow()[0];
             let exec_25 = self.executed.borrow()[(exec_len * 25) / 100];
             let exec_median = self.executed.borrow()[exec_len / 2];
 
             info!(
-                "Replica {} Threads {}, Min(cycles): {}, Median(cycles): {}, Tail(cycles): {}, ExecMin: {}, Exec25: {}, ExecMedian: {}",
+                "Replica {} Threads {} - Min(cycles): {}, Median(cycles): {}, Tail(cycles): {}, ExecMin: {}, Exec25: {}, ExecMedian: {}",
                 self.idx,
                 self.next.load(Ordering::Relaxed) - 1,
                 min,
@@ -639,6 +644,30 @@ where
                 exec_25,
                 exec_median,
             );
+
+            self.stall
+                .borrow_mut()
+                .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let cores = self.next.load(Ordering::Relaxed);
+            for i in 1..cores + 1 {
+                let per_thread = self
+                    .stall
+                    .borrow()
+                    .clone()
+                    .into_iter()
+                    .filter(|&x| x.0 == i)
+                    .collect::<Vec<_>>();
+                let len = per_thread.len();
+                if len > 0 {
+                    let min = per_thread[0].1;
+                    let median = per_thread[len / 2].1;
+                    let tail = per_thread[(len * 98) / 100].1;
+                    info!(
+                        "Rep {} The {} Readings {} - Min(cycles): {}, Median(cycles): {}, Tail(cycles): {}",
+                        self.idx, i, len, min, median, tail
+                    );
+                }
+            }
         } else {
             info!("Invalid length");
         }

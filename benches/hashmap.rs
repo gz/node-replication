@@ -241,6 +241,7 @@ where
         .log_size(32 * 1024 * 1024)
         .replica_strategy(mkbench::ReplicaStrategy::One)
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
+        .replica_strategy(mkbench::ReplicaStrategy::L1)
         .thread_mapping(ThreadMapping::Interleave)
         .configure(
             c,

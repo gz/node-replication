@@ -1,0 +1,26 @@
+name: CI
+
+# Controls when the action will run. Triggers the workflow on push or pull request
+# events but only for the master branch
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+    
+jobs:
+  build:
+    runs-on: self-hosted
+
+    steps:
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses: actions/checkout@v2
+
+    - name: Update dependencies
+      run: sudo apt install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6 pkg-config --yes
+
+    - name: Test the library
+      run: |
+        cargo +nightly fmt -- --check
+        timeout 1h cargo test
+        cargo bench --no-run

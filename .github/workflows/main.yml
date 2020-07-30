@@ -18,12 +18,10 @@ jobs:
 
     - name: Update dependencies
       run: sudo apt install libhwloc-dev gnuplot libfuse-dev liburcu-dev liburcu6 pkg-config --yes
-    
-    - name: Source cargo
-      run: source $HOME/.cargo/env
-    
+        
     - name: Test the library
       run: |
+        source $HOME/.cargo/env
         cargo +nightly fmt -- --check
         timeout 1h cargo test
         cargo bench --no-run

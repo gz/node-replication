@@ -24,4 +24,4 @@ jobs:
         source $HOME/.cargo/env
         cargo +nightly fmt -- --check
         timeout 1h cargo test
-        cargo bench --no-run
+        cargo +nightly bench --no-run

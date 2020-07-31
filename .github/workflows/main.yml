@@ -8,6 +8,10 @@ on:
   pull_request:
     branches: [ master ]
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     runs-on: self-hosted
@@ -23,3 +27,16 @@ jobs:
           cargo +nightly fmt -- --check
           timeout 1h cargo test
           cargo bench --no-run
+  benchskylake2x:
+    needs: build
+    runs-on: [self-hosted, skylake2x]
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+      - name: Benchmarking on skylak2x
+        run: bash scripts/ci.bash
+    env:
+      CI_MACHINE_TYPE: "skylake2x"

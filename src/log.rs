@@ -336,7 +336,7 @@ where
     /// used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
-    pub(crate) fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
+    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;

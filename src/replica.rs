@@ -469,18 +469,6 @@ where
         }
     }
 
-    /// This method is useful to benchmark operation append to the shared log.
-    #[inline(always)]
-    #[doc(hidden)]
-    pub fn append<F: FnMut(<D as Dispatch>::WriteOperation, usize)>(
-        &self,
-        ops: &[<D as Dispatch>::WriteOperation],
-        idx: ReplicaToken,
-        s: F,
-    ) {
-        self.slog.append(ops, idx.0, s)
-    }
-
     /// Issues a read-only operation against the replica and returns a response.
     /// Makes sure the replica is synced up against the log before doing so.
     fn read_only(

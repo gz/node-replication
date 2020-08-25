@@ -75,7 +75,7 @@ parking_lot = "0.7.1"
 serde = { version = "1", features = ["derive"] }
 clap = { version = "2", features = ["yaml"] }
 rand = { version = "0.7", features = ["small_rng"] }
-dashmap = "3.11.1"
+dashmap = " 4.0.0-rc6"
 lazy_static = "1.4"
 
 [features]

@@ -504,6 +504,31 @@ where
         self.read_only(op, idx.0)
     }
 
+    // TODO(irina): Currently only handling a single hash;
+    // scan operation needs to support more than one log
+    pub fn execute_scan(
+      &self,
+      // TODO(irina): ScanOperation?
+      //op: <D as Dispatch>::ScanOperation,
+      op: <D as Dispatch>::WriteOperation,
+      idx: ReplicaToken,
+    ) -> <D as Dispatch>::Response {
+      let _hash = op.hash();
+      let hash = idx.0 % self.slog.len(); 
+
+      // Append the scan op in the logs 
+      let entry = self.append_scan_to_logs(op.clone(), hash);
+
+      // Execute local scan, waiting for replica to be up to date
+      let resp = self.local_scan(op, idx.0, entry);
+      
+      // Fix scan log entries 
+      self.slog[hash].fix_scan_entry(entry);
+
+      // Return scan's result
+      resp
+  }
+
     /// Busy waits until a response is available within the thread's context.
     /// `idx` identifies this thread.
     fn get_response(&self, idx: usize, hash: usize) -> <D as Dispatch>::Response {
@@ -596,6 +621,27 @@ where
         self.data.dispatch(op)
     }
 
+    fn local_scan(
+      &self,
+      //op: <D as Dispatch>::ScanOperation,
+      op: <D as Dispatch>::WriteOperation,
+      tid: usize,
+      scan_entry_idx: usize
+    ) -> <D as Dispatch>::Response {
+      let hash = op.hash();
+      let hash_idx = hash % self.slog.len();
+
+      /* wait for a combiner to update, or do the update here if there is no combiner */
+      while !self.slog[hash_idx].is_replica_synced_for_scans(self.idx[hash_idx], scan_entry_idx) {
+          self.try_update_to(tid, hash_idx, scan_entry_idx);
+          spin_loop_hint();
+      }
+
+      // TODO(irina): Scan is not a mutable operation, but right now we need this to put on the log
+      //self.data.dispatch_scan(op)
+      self.data.dispatch_mut(op)
+  }
+
     /// Enqueues an operation inside a thread local context. Returns a boolean
     /// indicating whether the operation was enqueued (true) or not (false).
     #[inline(always)]
@@ -609,37 +655,75 @@ where
         true
     }
 
-    /// Appends an operation to the log and attempts to perform flat combining.
-    /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    fn try_combine(&self, tid: usize, hashidx: usize) {
+    fn try_fc_lock(&self, tid: usize, hashidx: usize) -> bool {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _i in 0..4 {
-            if unsafe {
-                core::ptr::read_volatile(
-                    &self.combiners[hashidx]
-                        as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
-                        as *const usize,
-                )
-            } != 0
-            {
-                return;
-            };
+          if unsafe {
+              core::ptr::read_volatile(
+                  &self.combiners[hashidx]
+                      as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
+                      as *const usize,
+              )
+          } != 0
+          {
+              /* someone else has the lock */
+              return false;
+          };
         }
 
         // Try to become the combiner here. If this fails, then simply return.
         if self.combiners[hashidx].compare_and_swap(0, tid, Ordering::Acquire) != 0 {
-            return;
+            /* cas failed, we don't hold the lock */
+            return false;
         }
 
-        // Successfully became the combiner; perform one round of flat combining.
-        self.combine(hashidx);
+        /* successfully acquired the lock */
+        return true;
+    }
 
+    fn release_fc_lock(&self, hashidx: usize) {
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
         // the staging buffer as well.
         self.combiners[hashidx].store(0, Ordering::Release);
     }
+
+    /// Appends an operation to the log and attempts to perform flat combining.
+    /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
+    fn try_combine(&self, tid: usize, hashidx: usize) {
+        if !self.try_fc_lock(tid, hashidx) {
+          return;
+        }
+
+        // Successfully became the combiner; perform one round of flat combining.
+        self.combine(hashidx);
+
+        self.release_fc_lock(hashidx);
+    }
+
+    fn try_update_to(&self, tid: usize, hashidx: usize, toentry: usize) {
+      if !self.try_fc_lock(tid, hashidx) {
+        return;
+      }
+
+      // Successfully became the combiner; perform one round of flat combining.
+      self.update_to(hashidx, toentry);
+
+      self.release_fc_lock(hashidx);
+  }
+
+    #[inline(always)]
+    fn append_scan_to_logs(
+      &self, 
+      op: <D as Dispatch>::WriteOperation,
+      hashidx: usize) -> usize {
+        /* Re-executing the scan from the log is not necessary */
+        let f = |_o: <D as Dispatch>::WriteOperation, _i:usize| { };
+        // TODO(irina): we block everyone right now, change this to only block threads from the same replica
+        //self.slog[hashidx].append(&[op], self.idx[hashidx], f)
+        self.slog[hashidx].append_unfinished(&[op], self.idx[hashidx], f)
+      }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
     #[inline(always)]
@@ -702,6 +786,19 @@ where
             pending[i - 1].store(false, Ordering::Relaxed);
         }
     }
+
+
+/// Updates from log. Must hold the FC lock
+#[inline(always)]
+fn update_to(&self, hashidx: usize, toentry: usize) {
+    // Execute any operations on the shared log against this replica.
+    {
+        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
+            self.data.dispatch_mut(o);
+        };
+        self.slog[hashidx].exec_to(self.idx[hashidx], toentry, &mut f);
+    }
+  }
 }
 
 #[cfg(test)]

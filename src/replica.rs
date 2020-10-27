@@ -888,12 +888,13 @@ mod test {
     #[test]
     fn test_replica_execute_not_synced() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+        let idx = slog.register().unwrap();
         let repl = Replica::<Data>::new(vec![slog.clone()]);
 
         // Add in operations to the log off the side, not through the replica.
         let o = [OpWr(121), OpWr(212)];
-        slog.append(&o, 2, |_o: OpWr, _i: usize| {});
-        slog.exec(2, &mut |_o: OpWr, _i: usize| {});
+        slog.append(&o, idx, |_o: OpWr, _i: usize| {});
+        slog.exec(idx, &mut |_o: OpWr, _i: usize| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(OpRd(11), t1));

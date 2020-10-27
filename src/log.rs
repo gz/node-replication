@@ -757,7 +757,10 @@ mod tests {
     #[test]
     fn test_entry_create_default() {
         let e = Entry::<Operation>::default();
-        assert_eq!(e.operation, None);
+        assert_eq!(e.operation[0], None);
+        assert_eq!(e.operation[1], None);
+        assert_eq!(e.operation[2], None);
+        assert_eq!(e.operation[3], None);
         assert_eq!(e.replica, 0);
         assert_eq!(e.alivef.load(Ordering::Relaxed), false);
     }
@@ -765,15 +768,16 @@ mod tests {
     // Test that our entry_size() method returns the correct size.
     #[test]
     fn test_log_entry_size() {
-        assert_eq!(Log::<Operation>::entry_size(), 64);
+        assert_eq!(Log::<Operation>::entry_size(), 128);
     }
 
     // Tests if a small log can be correctly constructed.
     #[test]
     fn test_log_create() {
-        let l = Log::<Operation>::new(1024 * 1024, 1);
-        let n = (1024 * 1024) / Log::<Operation>::entry_size();
-        assert_eq!(l.rawb, 1024 * 1024);
+        let size = 2 * 1024 * 1024;
+        let l = Log::<Operation>::new(size, 1);
+        let n = size / Log::<Operation>::entry_size();
+        assert_eq!(l.rawb, size);
         assert_eq!(l.size, n);
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
@@ -803,8 +807,9 @@ mod tests {
     // are a power of two.
     #[test]
     fn test_log_power_of_two() {
-        let l = Log::<Operation>::new(524 * 1024, 1);
-        let n = ((524 * 1024) / Log::<Operation>::entry_size()).checked_next_power_of_two();
+        let size = 2 * 1024 * 1024;
+        let l = Log::<Operation>::new(size, 1);
+        let n = (size / Log::<Operation>::entry_size()).checked_next_power_of_two();
         assert_eq!(l.rawb, n.unwrap() * Log::<Operation>::entry_size());
         assert_eq!(l.size, n.unwrap());
         assert_eq!(l.slog.len(), n.unwrap());
@@ -860,13 +865,17 @@ mod tests {
     #[test]
     fn test_log_append() {
         let l = Log::<Operation>::default();
+        let idx = l.register().unwrap();
         let o = [Operation::Read];
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, idx, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
         let slog = l.slog[0].take();
-        assert_eq!(slog.operation, Some(Operation::Read));
+        assert_eq!(slog.operation[0], Some(Operation::Read));
+        assert_eq!(slog.operation[1], None);
+        assert_eq!(slog.operation[2], None);
+        assert_eq!(slog.operation[3], None);
         assert_eq!(slog.replica, 1);
     }
 
@@ -943,14 +952,15 @@ mod tests {
     #[test]
     fn test_log_exec() {
         let l = Log::<Operation>::default();
+        let idx = l.register().unwrap();
         let o = [Operation::Read];
         let mut f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
-        l.exec(1, &mut f);
+        l.append(&o, idx, |_o: Operation, _i: usize| {});
+        l.exec(idx, &mut f);
 
         assert_eq!(
             l.tail.load(Ordering::Relaxed),
@@ -977,6 +987,7 @@ mod tests {
     #[test]
     fn test_log_exec_zero() {
         let l = Log::<Operation>::default();
+        let idx = l.register().unwrap();
         let o = [Operation::Read];
         let mut f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
@@ -986,15 +997,16 @@ mod tests {
             assert!(false);
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
-        l.exec(1, &mut f);
-        l.exec(1, &mut g);
+        l.append(&o, idx, |_o: Operation, _i: usize| {});
+        l.exec(idx, &mut f);
+        l.exec(idx, &mut g);
     }
 
     // Test that multiple entries on the log can be executed correctly.
     #[test]
     fn test_log_exec_multiple() {
         let l = Log::<Operation>::default();
+        let idx = l.register().unwrap();
         let o = [Operation::Read, Operation::Write(119)];
         let mut s = 0;
         let mut f = |op: Operation, _i: usize| match op {
@@ -1003,8 +1015,8 @@ mod tests {
             Operation::Invalid => assert!(false),
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
-        l.exec(1, &mut f);
+        l.append(&o, idx, |_o: Operation, _i: usize| {});
+        l.exec(idx, &mut f);
         assert_eq!(s, 240);
 
         assert_eq!(
@@ -1074,25 +1086,27 @@ mod tests {
     #[test]
     fn test_log_change_refcount() {
         let l = Log::<Arc<Operation>>::default();
+        let idx = l.register().unwrap();
         let o1 = [Arc::new(Operation::Read)];
         let o2 = [Arc::new(Operation::Read)];
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 1);
 
-        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        l.append(&o1[..], idx, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 2);
-        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        l.append(&o1[..], idx, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 3);
 
         unsafe { l.reset() };
+        let idx = l.register().unwrap();
 
         // Over here, we overwrite entries that were written to by the two
         // previous appends. This decreases the refcount of o1 and increases
         // the refcount of o2.
-        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        l.append(&o2[..], idx, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 2);
         assert_eq!(Arc::strong_count(&o2[0]), 2);
-        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        l.append(&o2[..], idx, |_o: Arc<Operation>, _i: usize| {});
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 3);
     }
@@ -1107,24 +1121,28 @@ mod tests {
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let size: usize = total_entries * entry_size;
         let l = Log::<Arc<Operation>>::new(size, 1);
+        assert_eq!(size, l.rawb);
+        let idx = l.register().unwrap();
         let o1 = [Arc::new(Operation::Read)];
         let o2 = [Arc::new(Operation::Read)];
         assert_eq!(Arc::strong_count(&o1[0]), 1);
         assert_eq!(Arc::strong_count(&o2[0]), 1);
 
-        for i in 1..(total_entries + 1) {
-            l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
+        for i in 1..(total_entries / 2) + 1 {
+            l.append(&o1[..], idx, |_o: Arc<Operation>, _i: usize| {});
             assert_eq!(Arc::strong_count(&o1[0]), i + 1);
         }
-        assert_eq!(Arc::strong_count(&o1[0]), total_entries + 1);
+        assert_eq!(Arc::strong_count(&o1[0]), (total_entries / 2) + 1);
 
-        for i in 1..(total_entries + 1) {
+        for i in 1..(total_entries / 2) + 1 {
             l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
-            assert_eq!(Arc::strong_count(&o1[0]), (total_entries + 1) - i);
-            assert_eq!(Arc::strong_count(&o2[0]), i + 1);
+            // After the first append, GC will start and it will exec all the
+            // entries which will remove all the operation from the entry.
+            assert_eq!(Arc::strong_count(&o1[0]), 1);
+            assert_eq!(Arc::strong_count(&o2[0]), i);
         }
         assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), total_entries + 1);
+        assert_eq!(Arc::strong_count(&o2[0]), total_entries / 2);
     }
 
     // Tests that is_replica_synced_for_read() works correctly; it returns

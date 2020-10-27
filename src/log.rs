@@ -25,6 +25,9 @@ const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES 
 /// The maximum number of replicas that can be used against the log.
 const MAX_REPLICAS: usize = 192;
 
+/// The maximum number of replicas that is used in bespin for mlnrfs.
+const MAX_REPLICAS_BESPIN: usize = 4;
+
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
 /// be performed by one of the replicas registered with the log.
@@ -55,7 +58,7 @@ where
     T: Sized + Clone,
 {
     /// The operation that this entry represents.
-    operation: Option<T>,
+    operation: [Option<T>; MAX_REPLICAS_BESPIN],
 
     /// Identifies the replica that issued the above operation.
     replica: usize,
@@ -220,7 +223,7 @@ where
                 ::core::ptr::write(
                     e,
                     Cell::new(Entry {
-                        operation: None,
+                        operation: Default::default(),
                         replica: 0usize,
                         alivef: AtomicBool::new(false),
                     }),
@@ -352,6 +355,7 @@ where
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
+        let replicas = self.next.load(Ordering::Relaxed) - 1;
 
         // Keep trying to reserve entries and add operations to the log until
         // we succeed in doing so.
@@ -418,7 +422,9 @@ where
                     m = !m;
                 }
 
-                unsafe { (*e).operation = Some(ops[i].clone()) };
+                for r in 0..replicas {
+                    unsafe { (*e).operation[r] = Some(ops[i].clone()) };
+                }
                 unsafe { (*e).replica = idx };
                 unsafe { (*e).alivef.store(m, Ordering::Release) };
             }
@@ -514,7 +520,13 @@ where
                 iteration += 1;
             }
 
-            unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
+            unsafe {
+                d(
+                    (*e).operation[idx - 1].as_ref().unwrap().clone(),
+                    (*e).replica,
+                );
+                (*e).operation[idx - 1] = None;
+            }
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {

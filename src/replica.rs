@@ -86,7 +86,6 @@ where
 
     //
     // Per-"ReplicaFlatCombiner":
-    //
     /// A replica-identifier received when the replica is registered against
     /// the shared-log. Required when consuming operations from the log.
     idx: Vec<usize>,
@@ -163,14 +162,18 @@ where
     /// pub struct OpWr(pub usize);
     ///
     /// impl LogMapper for OpWr {
-    ///     fn hash(&self) -> usize { 0 }
+    ///     fn hash(&self) -> usize {
+    ///         0
+    ///     }
     /// }
     ///
     /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpRd(());
     ///
     /// impl LogMapper for OpRd {
-    ///     fn hash(&self) -> usize { 0 }
+    ///     fn hash(&self) -> usize {
+    ///         0
+    ///     }
     /// }
     ///
     /// // This trait allows the `Data` to be used with node-replication.
@@ -180,18 +183,12 @@ where
     ///     type Response = Option<usize>;
     ///
     ///     // A read returns the underlying u64.
-    ///     fn dispatch(
-    ///         &self,
-    ///         _op: Self::ReadOperation,
-    ///     ) -> Self::Response {
+    ///     fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
     ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
     ///
     ///     // A write updates the underlying u64.
-    ///     fn dispatch_mut(
-    ///         &self,
-    ///         op: Self::WriteOperation,
-    ///     ) -> Self::Response {
+    ///     fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
     ///         self.junk.store(op.0, Ordering::Relaxed);
     ///         None
     ///     }
@@ -300,14 +297,18 @@ where
     /// pub struct OpWr(pub usize);
     ///
     /// impl LogMapper for OpWr {
-    ///     fn hash(&self) -> usize { 0 }
+    ///     fn hash(&self) -> usize {
+    ///         0
+    ///     }
     /// }
     ///
     /// #[derive(Hash, Debug, Eq, PartialEq, Clone, Copy)]
     /// pub struct OpRd(());
     ///
     /// impl LogMapper for OpRd {
-    ///     fn hash(&self) -> usize { 0 }
+    ///     fn hash(&self) -> usize {
+    ///         0
+    ///     }
     /// }
     ///
     /// impl Dispatch for Data {
@@ -315,17 +316,11 @@ where
     ///     type WriteOperation = OpWr;
     ///     type Response = Option<usize>;
     ///
-    ///     fn dispatch(
-    ///         &self,
-    ///         _op: Self::ReadOperation,
-    ///     ) -> Self::Response {
+    ///     fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
     ///         Some(self.junk.load(Ordering::Relaxed))
     ///     }
     ///
-    ///     fn dispatch_mut(
-    ///         &self,
-    ///         op: Self::WriteOperation,
-    ///     ) -> Self::Response {
+    ///     fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
     ///         self.junk.store(op.0, Ordering::Relaxed);
     ///         None
     ///     }
@@ -336,7 +331,9 @@ where
     ///
     /// // Calling register() returns an idx that can be used to execute
     /// // operations against the replica.
-    /// let idx = replica.register().expect("Failed to register with replica.");
+    /// let idx = replica
+    ///     .register()
+    ///     .expect("Failed to register with replica.");
     /// ```
     pub fn register(&self) -> Option<ReplicaToken> {
         // Loop until we either run out of identifiers or we manage to increment `next`.
@@ -600,7 +597,7 @@ where
     fn make_pending(&self, op: <D as Dispatch>::WriteOperation, tid: usize, hash: usize) -> bool {
         loop {
             if self.contexts[tid - 1].enqueue(op.clone(), hash) {
-                self.pending[hash][tid - 1].store(true, Ordering::Release);
+                self.pending[hash][tid - 1].store(true, Ordering::Relaxed);
                 break;
             }
         }
@@ -655,9 +652,10 @@ where
 
         // Collect operations from each thread registered with this replica.
         for tid in 1..next {
-            if pending[tid - 1].compare_and_swap(true, false, Ordering::Release) {
+            if pending[tid - 1].load(Ordering::Relaxed) {
                 // pass hash of current op to contexts, only get ops from context that have the same hash/log id
                 operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hashidx);
+                pending[tid - 1].store(false, Ordering::Relaxed);
             }
         }
 

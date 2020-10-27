@@ -87,17 +87,17 @@ where
     /// # Example
     ///
     /// ```
-    ///     use mlnr::rwlock::RwLock;
+    /// use mlnr::rwlock::RwLock;
     ///
-    ///     // Create the lock.
-    ///     let lock = RwLock::<usize>::default();
+    /// // Create the lock.
+    /// let lock = RwLock::<usize>::default();
     ///
-    ///     // Acquire the write lock. This returns a guard that can be used
-    ///     // to perform writes against the protected data. We need to know
-    ///     // the number of concurrent reader threads upfront.
-    ///     const N_CONCURRENT_READERS: usize = 32;
-    ///     let mut w_guard = lock.write(N_CONCURRENT_READERS);
-    ///     *w_guard = 777;
+    /// // Acquire the write lock. This returns a guard that can be used
+    /// // to perform writes against the protected data. We need to know
+    /// // the number of concurrent reader threads upfront.
+    /// const N_CONCURRENT_READERS: usize = 32;
+    /// let mut w_guard = lock.write(N_CONCURRENT_READERS);
+    /// *w_guard = 777;
     /// ```
     pub fn write(&self, n: usize) -> WriteGuard<T> {
         // First, wait until we can acquire the writer lock.

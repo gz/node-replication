@@ -10,7 +10,7 @@ use crossbeam_utils::CachePadded;
 
 /// The maximum number of operations that can be batched inside this context.
 /// NOTE: This constant must be a power of two for index() to work.
-pub(crate) const MAX_PENDING_OPS: usize = 32;
+pub(crate) const MAX_PENDING_OPS: usize = 8;
 const_assert!(MAX_PENDING_OPS >= 1 && (MAX_PENDING_OPS & (MAX_PENDING_OPS - 1) == 0));
 
 /// A pending operation is a combination of the its op-code (T),
@@ -242,18 +242,18 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         let r = [Ok(11), Ok(12), Ok(13), Ok(14)];
 
-        c.tail.store(16, Ordering::Relaxed);
-        c.comb.store(12, Ordering::Relaxed);
+        c.tail.store(8, Ordering::Relaxed);
+        c.comb.store(4, Ordering::Relaxed);
         c.enqueue_resps(&r);
 
-        assert_eq!(c.tail.load(Ordering::Relaxed), 16);
+        assert_eq!(c.tail.load(Ordering::Relaxed), 8);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
-        assert_eq!(c.comb.load(Ordering::Relaxed), 16);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 8);
 
-        assert_eq!(c.batch[12].get().2, Some(r[0]));
-        assert_eq!(c.batch[13].get().2, Some(r[1]));
-        assert_eq!(c.batch[14].get().2, Some(r[2]));
-        assert_eq!(c.batch[15].get().2, Some(r[3]));
+        assert_eq!(c.batch[4].get().2, Some(r[0]));
+        assert_eq!(c.batch[5].get().2, Some(r[1]));
+        assert_eq!(c.batch[6].get().2, Some(r[2]));
+        assert_eq!(c.batch[7].get().2, Some(r[3]));
     }
 
     // Tests that attempting to enqueue an empty batch of responses on the context
@@ -263,15 +263,15 @@ mod test {
         let c = Context::<u64, Result<u64, ()>>::default();
         let r = [];
 
-        c.tail.store(16, Ordering::Relaxed);
-        c.comb.store(12, Ordering::Relaxed);
+        c.tail.store(8, Ordering::Relaxed);
+        c.comb.store(4, Ordering::Relaxed);
         c.enqueue_resps(&r);
 
-        assert_eq!(c.tail.load(Ordering::Relaxed), 16);
+        assert_eq!(c.tail.load(Ordering::Relaxed), 8);
         assert_eq!(c.head.load(Ordering::Relaxed), 0);
-        assert_eq!(c.comb.load(Ordering::Relaxed), 12);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 4);
 
-        assert_eq!(c.batch[12].get().2, None);
+        assert_eq!(c.batch[4].get().2, None);
     }
 
     // Tests whether ops() can successfully retrieve operations enqueued on this context.

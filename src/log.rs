@@ -1116,7 +1116,7 @@ mod tests {
     #[test]
     fn test_log_refcount_change_with_gc() {
         let entry_size = 64;
-        let total_entries = 16384;
+        let total_entries = 4096;
 
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let size: usize = total_entries * entry_size;

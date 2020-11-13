@@ -137,6 +137,9 @@ where
 
     /// Callback function
     gc: UnsafeCell<*const dyn FnMut(usize, usize)>,
+
+    ///
+    send_ipi: CachePadded<AtomicBool>,
 }
 
 impl<'a, T> fmt::Debug for Log<'a, T>
@@ -249,6 +252,7 @@ where
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
             gc: UnsafeCell::new(&|_lid: usize, _rid: usize| {}),
+            send_ipi: CachePadded::new(AtomicBool::new(true)),
         }
     }
 
@@ -372,6 +376,35 @@ where
 
             let tail = self.tail.load(Ordering::Relaxed);
             let head = self.head.load(Ordering::Relaxed);
+
+            // Head and tail doesn't wrap around; so it works.
+            let used = tail - head + 1;
+
+            if self.idx != 1 && (used > self.size / 2) {
+                let mut dormant_replica = 0;
+                let r = self.next.load(Ordering::Relaxed);
+                let mut min_local_tail = self.ltails[0].load(Ordering::Relaxed);
+
+                // Find the smallest local tail across all replicas.
+                for idx in 1..r {
+                    let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+                    if min_local_tail > cur_local_tail {
+                        dormant_replica = idx;
+                        min_local_tail = cur_local_tail
+                    };
+                }
+
+                if dormant_replica > 0
+                    && self
+                        .send_ipi
+                        .compare_and_swap(true, false, Ordering::Relaxed)
+                        == true
+                {
+                    let f: &mut dyn FnMut(usize, usize) =
+                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(usize, usize)) };
+                    f(self.idx, dormant_replica);
+                }
+            }
 
             // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
             // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
@@ -578,11 +611,23 @@ where
             // from the beginning of this loop again. Before doing so, try consuming
             // any new entries on the log to prevent deadlock.
             if min_local_tail == global_head {
-                if iteration % WARN_THRESHOLD == 0 {
+                if self.idx == 1
+                    && iteration % 32 == 0
+                    && self
+                        .send_ipi
+                        .compare_and_swap(true, false, Ordering::Relaxed)
+                        == true
+                {
                     let f: &mut dyn FnMut(usize, usize) =
                         unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(usize, usize)) };
                     f(self.idx, dormant_rid);
-                    warn!("Spending a long time in `advance_head`, are we starving?");
+                }
+                if iteration % WARN_THRESHOLD == 0 {
+                    warn!(
+                        "Spending a long time in `advance_head`, are we starving at replica {} log {}?",
+                        rid,
+                        self.idx
+                    );
                 }
                 iteration += 1;
                 self.exec(rid, &mut s);
@@ -591,6 +636,7 @@ where
 
             // There are entries that can be freed up; update the head offset.
             self.head.store(min_local_tail, Ordering::Relaxed);
+            self.send_ipi.store(true, Ordering::Relaxed);
 
             // Make sure that we freed up enough space so that threads waiting for
             // GC in append can make progress. Otherwise, try to make progress again.

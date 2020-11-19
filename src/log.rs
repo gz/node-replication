@@ -424,7 +424,7 @@ where
                 unsafe { (*e).replica = idx };
                 unsafe { (*e).alivef.store(m, Ordering::Release) };
                 if i == 0 {
-                  entry = eidx;
+                    entry = eidx;
                 }
             }
 
@@ -435,104 +435,103 @@ where
 
             return entry;
         }
-      }
+    }
 
-      // TODO(irina): Get rid of this function and use replica instead of alivef to block threads 
-      // from the same replica; alivef blocks threads from ALL replicas, which is more than we need.
-      #[inline(always)]
-      #[doc(hidden)]
-      pub fn append_unfinished<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) -> usize {
-          let nops = ops.len();
-          let mut iteration = 1;
-          let mut waitgc = 1;
-          let mut entry = 0;
-  
-          // Keep trying to reserve entries and add operations to the log until
-          // we succeed in doing so.
-          loop {
-              if iteration % WARN_THRESHOLD == 0 {
-                  warn!(
-                      "append(ops.len()={}, {}) takes too many iterations ({}) to complete...",
-                      ops.len(),
-                      idx,
-                      iteration,
-                  );
-              }
-              iteration += 1;
-  
-              let tail = self.tail.load(Ordering::Relaxed);
-              let head = self.head.load(Ordering::Relaxed);
-  
-              // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
-              // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
-              // is currently trying to advance the head of the log. Keep refreshing the
-              // replica against the log to make sure that it isn't deadlocking GC.
-              if tail > head + self.size - GC_FROM_HEAD {
-                  if waitgc % WARN_THRESHOLD == 0 {
-                      warn!(
-                          "append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
-                          ops.len(),
-                          idx,
-                          waitgc,
-                      );
-                  }
-                  waitgc += 1;
-                  self.exec(idx, &mut s);
-                  continue;
-              }
-  
-              // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
-              // entries left on the log, then we need to advance the head of the log.
-              let mut advance = false;
-              if tail + nops > head + self.size - GC_FROM_HEAD {
-                  advance = true
-              };
-  
-              // Try reserving slots for the operations. If that fails, then restart
-              // from the beginning of this loop.
-              if self
-                  .tail
-                  .compare_and_swap(tail, tail + nops, Ordering::Acquire)
-                  != tail
-              {
-                  continue;
-              };
-  
-              // Successfully reserved entries on the shared log. Add the operations in.
-              for i in 0..nops {
-                  let eidx = self.index(tail + i);
-                  let e = self.slog[eidx].as_ptr(); 
-  
-                  unsafe { (*e).operation = Some(ops[i].clone()) };
-                  unsafe { (*e).replica = idx };
-                  /* We don't set alivef for scan operations until after the scan is done */
-                  if i == 0 {
+    // TODO(irina): Get rid of this function and use replica instead of alivef to block threads
+    // from the same replica; alivef blocks threads from ALL replicas, which is more than we need.
+    #[inline(always)]
+    #[doc(hidden)]
+    pub fn append_unfinished<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) -> usize {
+        let nops = ops.len();
+        let mut iteration = 1;
+        let mut waitgc = 1;
+        let mut entry = 0;
+
+        // Keep trying to reserve entries and add operations to the log until
+        // we succeed in doing so.
+        loop {
+            if iteration % WARN_THRESHOLD == 0 {
+                warn!(
+                    "append(ops.len()={}, {}) takes too many iterations ({}) to complete...",
+                    ops.len(),
+                    idx,
+                    iteration,
+                );
+            }
+            iteration += 1;
+
+            let tail = self.tail.load(Ordering::Relaxed);
+            let head = self.head.load(Ordering::Relaxed);
+
+            // If there are fewer than `GC_FROM_HEAD` entries on the log, then just
+            // try again. The replica that reserved entry (h + self.size - GC_FROM_HEAD)
+            // is currently trying to advance the head of the log. Keep refreshing the
+            // replica against the log to make sure that it isn't deadlocking GC.
+            if tail > head + self.size - GC_FROM_HEAD {
+                if waitgc % WARN_THRESHOLD == 0 {
+                    warn!(
+                        "append(ops.len()={}, {}) takes too many iterations ({}) waiting for gc...",
+                        ops.len(),
+                        idx,
+                        waitgc,
+                    );
+                }
+                waitgc += 1;
+                self.exec(idx, &mut s);
+                continue;
+            }
+
+            // If on adding in the above entries there would be fewer than `GC_FROM_HEAD`
+            // entries left on the log, then we need to advance the head of the log.
+            let mut advance = false;
+            if tail + nops > head + self.size - GC_FROM_HEAD {
+                advance = true
+            };
+
+            // Try reserving slots for the operations. If that fails, then restart
+            // from the beginning of this loop.
+            if self
+                .tail
+                .compare_and_swap(tail, tail + nops, Ordering::Acquire)
+                != tail
+            {
+                continue;
+            };
+
+            // Successfully reserved entries on the shared log. Add the operations in.
+            for i in 0..nops {
+                let eidx = self.index(tail + i);
+                let e = self.slog[eidx].as_ptr();
+
+                unsafe { (*e).operation = Some(ops[i].clone()) };
+                unsafe { (*e).replica = idx };
+                /* We don't set alivef for scan operations until after the scan is done */
+                if i == 0 {
                     entry = eidx;
-                  }
-              }
-  
-              // If needed, advance the head of the log forward to make room on the log.
-              if advance {
-                  self.advance_head(idx, &mut s);
-              }
-  
-              return entry;
-          }
-        }
+                }
+            }
 
-      pub fn fix_scan_entry(&self, entry: usize) {
+            // If needed, advance the head of the log forward to make room on the log.
+            if advance {
+                self.advance_head(idx, &mut s);
+            }
+
+            return entry;
+        }
+    }
+
+    pub fn fix_scan_entry(&self, entry: usize) {
         // TODO(irina): check entry is valid >= 0 < LOG SIZE
         // TODO(irina): check slog[entry].operation == SCAN
         let e = self.slog[entry].as_ptr();
         // TODO(irina): Right now we fix the entry by correcting alivef
         // Need to transition this to use the replica instead, so that we only block threads on our replica
-        //unsafe { (*e).replica = MAX_REPLICAS }; 
+        //unsafe { (*e).replica = MAX_REPLICAS };
         let m = unsafe { (*e).alivef.load(Ordering::Relaxed) };
         unsafe { (*e).alivef.store(!m, Ordering::Release) };
-      }
+    }
 
-
-      /// Executes a passed in closure (`d`) on all operations starting from
+    /// Executes a passed in closure (`d`) on all operations starting from
     /// a replica's local tail on the shared log. The replica is identified through an
     /// `idx` passed in as an argument.
     ///
@@ -577,8 +576,8 @@ where
     /// from the shared log to be executed and the replica that issued it.
     #[inline(always)]
     pub(crate) fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
-      let t = self.tail.load(Ordering::Relaxed);
-      self.exec_to(idx, t, d);  
+        let t = self.tail.load(Ordering::Relaxed);
+        self.exec_to(idx, t, d);
     }
 
     #[inline(always)]
@@ -587,8 +586,8 @@ where
         // Load the logical log offset from which we must execute operations.
         let l = self.ltails[my_replica].load(Ordering::Relaxed);
 
-        // Check if we have any work to do by comparing our local tail with the entry 
-        // up to where we want to update. 
+        // Check if we have any work to do by comparing our local tail with the entry
+        // up to where we want to update.
         // If they're equal, then we're done here and can simply return.
         let t = toentry;
         if l == t {
@@ -609,8 +608,7 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[my_replica].get() } 
-            {
+            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[my_replica].get() } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",

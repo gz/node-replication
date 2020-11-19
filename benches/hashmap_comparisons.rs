@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use urcu_sys;
 
-use node_replication::{Dispatch, Log, ReplicaToken};
+use mlnr::Dispatch;
+use mlnr::{Log, ReplicaToken};
 
 use crate::mkbench::ReplicaTrait;
 
@@ -37,9 +38,9 @@ where
 {
     type D = T;
 
-    fn new_arc(
-        _log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>,
-    ) -> std::sync::Arc<Self> {
+    fn sync_log(&self, idx: ReplicaToken, logid: usize) {}
+
+    fn new_arc(log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
         Arc::new(Partitioner {
             registered: AtomicUsize::new(0),
             data_structure: UnsafeCell::new(T::default()),
@@ -96,14 +97,14 @@ where
 {
     type D = T;
 
-    fn new_arc(
-        _log: &Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>,
-    ) -> std::sync::Arc<Self> {
+    fn new_arc(log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
             data_structure: T::default(),
         })
     }
+
+    fn sync_log(&self, idx: ReplicaToken, logid: usize) {}
 
     fn register_me(&self) -> Option<ReplicaToken> {
         let rt = unsafe { ReplicaToken::new(self.registered.fetch_add(1, Ordering::SeqCst)) };
@@ -146,7 +147,7 @@ impl Default for CHashMapWrapper {
 
 impl Dispatch for CHashMapWrapper {
     type ReadOperation = OpConcurrent;
-    type WriteOperation = ();
+    type WriteOperation = OpConcurrent;
     type Response = Result<Option<u64>, ()>;
 
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
@@ -155,12 +156,14 @@ impl Dispatch for CHashMapWrapper {
             OpConcurrent::Put(key, val) => {
                 self.0.insert(key, val);
                 Ok(None)
-            }
+            },
+            // TODO(irina): add meaningful Len
+            OpConcurrent::Len() => Ok(None)
         }
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }
@@ -180,7 +183,7 @@ impl Default for StdWrapper {
 
 impl Dispatch for StdWrapper {
     type ReadOperation = OpConcurrent;
-    type WriteOperation = ();
+    type WriteOperation = OpConcurrent;
     type Response = Result<Option<u64>, ()>;
 
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
@@ -190,11 +193,12 @@ impl Dispatch for StdWrapper {
                 self.0.write().insert(key, val);
                 Ok(None)
             }
+            OpConcurrent::Len() => Ok(Some(self.0.read().len() as u64)),
         }
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }
@@ -214,7 +218,7 @@ impl Default for FlurryWrapper {
 
 impl Dispatch for FlurryWrapper {
     type ReadOperation = OpConcurrent;
-    type WriteOperation = ();
+    type WriteOperation = OpConcurrent;
     type Response = Result<Option<u64>, ()>;
 
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
@@ -223,12 +227,14 @@ impl Dispatch for FlurryWrapper {
             OpConcurrent::Put(key, val) => {
                 self.0.pin().insert(key, val);
                 Ok(None)
-            }
+            },
+            // TODO(irina): add meaningful Len
+            OpConcurrent::Len() => Ok(None)
         }
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }
@@ -248,7 +254,7 @@ impl Default for DashWrapper {
 
 impl Dispatch for DashWrapper {
     type ReadOperation = OpConcurrent;
-    type WriteOperation = ();
+    type WriteOperation = OpConcurrent;
     type Response = Result<Option<u64>, ()>;
 
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
@@ -258,11 +264,15 @@ impl Dispatch for DashWrapper {
                 self.0.insert(key, val);
                 Ok(None)
             }
+            OpConcurrent::Len() => {
+                let ret: u64 = self.0.len() as u64;
+                Ok(Some(ret))
+            }
         }
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }
@@ -354,7 +364,7 @@ unsafe fn to_test_node(node: *mut urcu_sys::cds_lfht_node) -> *mut lfht_test_nod
 
 impl Dispatch for RcuHashMap {
     type ReadOperation = OpConcurrent;
-    type WriteOperation = ();
+    type WriteOperation = OpConcurrent;
     type Response = Result<Option<u64>, ()>;
 
     fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
@@ -413,13 +423,15 @@ impl Dispatch for RcuHashMap {
                         std::alloc::dealloc(old_node as *mut u8, layout);
                     }
                     Ok(None)
-                }
+                },
+                // TODO(irina): add meaningful Len
+                OpConcurrent::Len() => Ok(None)
             }
         }
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(&mut self, _op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, _op: Self::WriteOperation) -> Self::Response {
         unreachable!("dispatch_mut should not be called here")
     }
 }

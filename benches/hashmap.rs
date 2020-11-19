@@ -3,6 +3,7 @@
 
 //! Defines a hash-map that can be replicated.
 #![feature(test)]
+#![feature(get_mut_unchecked)]
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -12,8 +13,9 @@ use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
 
-use node_replication::Dispatch;
-use node_replication::Replica;
+use mlnr::Dispatch;
+use mlnr::LogMapper;
+use mlnr::Replica;
 
 mod hashmap_comparisons;
 mod mkbench;
@@ -51,12 +53,25 @@ pub const NOP: usize = 25_000_000;
 pub enum OpWr {
     /// Add an item to the hash-map.
     Put(u64, u64),
+    Len(),
+}
+
+impl LogMapper for OpWr {
+    fn hash(&self) -> usize {
+        0
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpRd {
     /// Get item from the hash-map.
     Get(u64),
+}
+
+impl LogMapper for OpRd {
+    fn hash(&self) -> usize {
+        0
+    }
 }
 
 /// When using a concurrent data-structure (as a comparison)
@@ -67,6 +82,13 @@ pub enum OpConcurrent {
     Get(u64),
     /// Add an item to the hash-map.
     Put(u64, u64),
+    Len(),
+}
+
+impl LogMapper for OpConcurrent {
+    fn hash(&self) -> usize {
+        0
+    }
 }
 
 /// Single-threaded implementation of the stack
@@ -74,23 +96,27 @@ pub enum OpConcurrent {
 /// We just use a vector.
 #[derive(Debug, Clone)]
 pub struct NrHashMap {
-    storage: HashMap<u64, u64>,
+    storage: dashmap::DashMap<u64, u64>,
 }
 
 impl NrHashMap {
-    pub fn put(&mut self, key: u64, val: u64) {
+    pub fn put(&self, key: u64, val: u64) {
         self.storage.insert(key, val);
     }
 
     pub fn get(&self, key: u64) -> Option<u64> {
         self.storage.get(&key).map(|v| *v)
     }
+
+    pub fn len(&self) -> u64 {
+        self.storage.len() as u64
+    }
 }
 
 impl Default for NrHashMap {
     /// Return a dummy hash-map with `INITIAL_CAPACITY` elements.
     fn default() -> NrHashMap {
-        let mut storage = HashMap::with_capacity(INITIAL_CAPACITY);
+        let mut storage = dashmap::DashMap::with_capacity(INITIAL_CAPACITY);
         for i in 0..INITIAL_CAPACITY {
             storage.insert(i as u64, (i + 1) as u64);
         }
@@ -110,11 +136,14 @@ impl Dispatch for NrHashMap {
     }
 
     /// Implements how we execute operation from the log against our local stack
-    fn dispatch_mut(&mut self, op: Self::WriteOperation) -> Self::Response {
+    fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Put(key, val) => {
                 self.put(key, val);
                 Ok(None)
+            }
+            OpWr::Len() => {
+                Ok(Some(self.len()))
             }
         }
     }
@@ -135,6 +164,8 @@ pub fn generate_operations(
 ) -> Vec<Operation<OpRd, OpWr>> {
     assert!(distribution == "skewed" || distribution == "uniform");
 
+    // TODO(irina): scan_ratio
+    const scan_ratio: usize = 10;
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
@@ -172,9 +203,11 @@ pub fn generate_operations_concurrent(
     write_ratio: usize,
     span: usize,
     distribution: &'static str,
-) -> Vec<Operation<OpConcurrent, ()>> {
+) -> Vec<Operation<OpConcurrent, OpConcurrent>> {
     assert!(distribution == "skewed" || distribution == "uniform");
 
+    // TODO(irina): scan_ratio
+    const scan_ratio: usize = 10;
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
@@ -189,7 +222,9 @@ pub fn generate_operations_concurrent(
             t_rng.gen_range(0, span as u64)
         };
 
-        if idx % 100 < write_ratio {
+        if idx % 100 < scan_ratio {
+            ops.push(Operation::ReadOperation(OpConcurrent::Len()));
+        } else if idx % 100 < write_ratio {
             ops.push(Operation::ReadOperation(OpConcurrent::Put(
                 id,
                 t_rng.next_u64(),
@@ -236,7 +271,7 @@ where
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<R>::new(ops)
-        .thread_defaults()
+        .thread_defaults(0)
         .update_batch(128)
         .log_size(32 * 1024 * 1024)
         .replica_strategy(mkbench::ReplicaStrategy::One)
@@ -262,7 +297,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<Partitioner<NrHashMap>>::new(ops)
-        .thread_defaults()
+        .thread_defaults(0)
         .replica_strategy(mkbench::ReplicaStrategy::PerThread)
         .thread_mapping(ThreadMapping::Interleave)
         .update_batch(128)
@@ -283,7 +318,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
 fn concurrent_ds_scale_out<T>(c: &mut TestHarness, name: &str, write_ratio: usize)
 where
     T: Dispatch<ReadOperation = OpConcurrent>,
-    T: Dispatch<WriteOperation = ()>,
+    T: Dispatch<WriteOperation = OpConcurrent>,
     T: 'static,
     T: Dispatch + Sync + Default + Send,
     <T as Dispatch>::Response: Send + Sync + Debug,
@@ -292,7 +327,7 @@ where
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<ConcurrentDs<T>>::new(ops)
-        .thread_defaults()
+        .thread_defaults(0)
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
@@ -319,7 +354,10 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
+    // TODO(irina):
+    //let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
+    // Scan - first 10%,  write is only (R-10): [10, 30]
+    let write_ratios = vec![40];
 
     unsafe {
         urcu_sys::rcu_init();
@@ -331,11 +369,11 @@ fn main() {
 
         #[cfg(feature = "cmp")]
         {
-            partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
-            concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
+            //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
+            //concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
             concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
-            concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
-            concurrent_ds_scale_out::<RcuHashMap>(&mut harness, "urcu", write_ratio);
+            //concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
+            //concurrent_ds_scale_out::<RcuHashMap>(&mut harness, "urcu", write_ratio);
             concurrent_ds_scale_out::<DashWrapper>(&mut harness, "dashmap", write_ratio);
         }
     }

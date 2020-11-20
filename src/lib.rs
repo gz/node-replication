@@ -110,6 +110,8 @@ pub trait Dispatch {
     /// assumptions made by this library no longer hold.
     type ReadOperation: Sized + Clone + PartialEq + Debug + LogMapper;
 
+    //type ScanOperation: Sized + Clone + PartialEq + Debug + LogMapper;
+
     /// A write operation. When executed against the data structure, an operation of
     /// this type is allowed to mutate state. The library ensures that this is done so
     /// in a thread-safe manner.
@@ -126,4 +128,6 @@ pub trait Dispatch {
     /// Method on the data structure that allows a write operation to be
     /// executed against it.
     fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response;
+
+    //fn dispatch_scan(&self, op: Self::ScanOperation) -> Self::Response;
 }

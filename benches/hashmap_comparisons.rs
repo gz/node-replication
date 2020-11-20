@@ -193,7 +193,11 @@ impl Dispatch for StdWrapper {
                 self.0.write().insert(key, val);
                 Ok(None)
             }
-            OpConcurrent::Len() => Ok(Some(self.0.read().len() as u64)),
+            OpConcurrent::Len() => {
+              let ret: u64 = self.0.read().len() as u64;
+              println!("calling Std::hashmap::Len {}", ret);
+              Ok(Some(ret))
+            }
         }
     }
 
@@ -266,6 +270,7 @@ impl Dispatch for DashWrapper {
             }
             OpConcurrent::Len() => {
                 let ret: u64 = self.0.len() as u64;
+                println!("calling Dash::hashmap::Len {}", ret);
                 Ok(Some(ret))
             }
         }

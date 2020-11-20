@@ -165,7 +165,8 @@ pub fn generate_operations(
     assert!(distribution == "skewed" || distribution == "uniform");
 
     // TODO(irina): scan_ratio
-    const scan_ratio: usize = 10;
+    //const SCAN_RATIO: usize = 10;
+    const SCAN_RATIO: usize = 0;
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
@@ -180,7 +181,9 @@ pub fn generate_operations(
             t_rng.gen_range(0, span as u64)
         };
 
-        if idx % 100 < write_ratio {
+        if idx % 100 < SCAN_RATIO {
+          ops.push(Operation::WriteOperation(OpWr::Len()));
+        } else if idx % 100 < write_ratio {
             ops.push(Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64())));
         } else {
             ops.push(Operation::ReadOperation(OpRd::Get(id)));
@@ -207,7 +210,8 @@ pub fn generate_operations_concurrent(
     assert!(distribution == "skewed" || distribution == "uniform");
 
     // TODO(irina): scan_ratio
-    const scan_ratio: usize = 10;
+    //const SCAN_RATIO: usize = 10;
+    const SCAN_RATIO: usize = 0;
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
@@ -222,7 +226,7 @@ pub fn generate_operations_concurrent(
             t_rng.gen_range(0, span as u64)
         };
 
-        if idx % 100 < scan_ratio {
+        if idx % 100 < SCAN_RATIO {
             ops.push(Operation::ReadOperation(OpConcurrent::Len()));
         } else if idx % 100 < write_ratio {
             ops.push(Operation::ReadOperation(OpConcurrent::Put(
@@ -277,6 +281,8 @@ where
         .replica_strategy(mkbench::ReplicaStrategy::One)
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
         .thread_mapping(ThreadMapping::Interleave)
+        .log_strategy(mkbench::LogStrategy::One)
+        //.log_strategy(mkbench::LogStrategy::Custom(5))
         .configure(
             c,
             &bench_name,
@@ -300,6 +306,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
         .thread_defaults(0)
         .replica_strategy(mkbench::ReplicaStrategy::PerThread)
         .thread_mapping(ThreadMapping::Interleave)
+        .log_strategy(mkbench::LogStrategy::One)
         .update_batch(128)
         .configure(
             c,
@@ -331,6 +338,7 @@ where
         .replica_strategy(mkbench::ReplicaStrategy::One) // Can only be One
         .update_batch(128)
         .thread_mapping(ThreadMapping::Interleave)
+        .log_strategy(mkbench::LogStrategy::One)
         .configure(
             c,
             &bench_name,

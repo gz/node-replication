@@ -53,6 +53,7 @@ pub const NOP: usize = 25_000_000;
 pub enum OpWr {
     /// Add an item to the hash-map.
     Put(u64, u64),
+    Len(),
 }
 
 impl LogMapper for OpWr {
@@ -81,6 +82,7 @@ pub enum OpConcurrent {
     Get(u64),
     /// Add an item to the hash-map.
     Put(u64, u64),
+    Len(),
 }
 
 impl LogMapper for OpConcurrent {
@@ -104,6 +106,10 @@ impl NrHashMap {
 
     pub fn get(&self, key: u64) -> Option<u64> {
         self.storage.get(&key).map(|v| *v)
+    }
+
+    pub fn len(&self) -> u64 {
+        self.storage.len() as u64
     }
 }
 
@@ -136,6 +142,9 @@ impl Dispatch for NrHashMap {
                 self.put(key, val);
                 Ok(None)
             }
+            OpWr::Len() => {
+                Ok(Some(self.len()))
+            }
         }
     }
 }
@@ -155,6 +164,9 @@ pub fn generate_operations(
 ) -> Vec<Operation<OpRd, OpWr>> {
     assert!(distribution == "skewed" || distribution == "uniform");
 
+    // TODO(irina): scan_ratio
+    //const SCAN_RATIO: usize = 10;
+    const SCAN_RATIO: usize = 0;
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
@@ -169,7 +181,9 @@ pub fn generate_operations(
             t_rng.gen_range(0, span as u64)
         };
 
-       if idx % 100 < write_ratio {
+        if idx % 100 < SCAN_RATIO {
+          ops.push(Operation::WriteOperation(OpWr::Len()));
+        } else if idx % 100 < write_ratio {
             ops.push(Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64())));
         } else {
             ops.push(Operation::ReadOperation(OpRd::Get(id)));
@@ -195,6 +209,9 @@ pub fn generate_operations_concurrent(
 ) -> Vec<Operation<OpConcurrent, OpConcurrent>> {
     assert!(distribution == "skewed" || distribution == "uniform");
 
+    // TODO(irina): scan_ratio
+    //const SCAN_RATIO: usize = 10;
+    const SCAN_RATIO: usize = 0;
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
@@ -209,7 +226,9 @@ pub fn generate_operations_concurrent(
             t_rng.gen_range(0, span as u64)
         };
 
-        if idx % 100 < write_ratio {
+        if idx % 100 < SCAN_RATIO {
+            ops.push(Operation::ReadOperation(OpConcurrent::Len()));
+        } else if idx % 100 < write_ratio {
             ops.push(Operation::ReadOperation(OpConcurrent::Put(
                 id,
                 t_rng.next_u64(),
@@ -343,8 +362,11 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
-    
+    // TODO(irina):
+    //let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
+    // Scan - first 10%,  write is only (R-10): [10, 30]
+    let write_ratios = vec![40];
+
     unsafe {
         urcu_sys::rcu_init();
     }
@@ -355,11 +377,11 @@ fn main() {
 
         #[cfg(feature = "cmp")]
         {
-            partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
-            concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
+            //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
+            //concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
             concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
-            concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
-            concurrent_ds_scale_out::<RcuHashMap>(&mut harness, "urcu", write_ratio);
+            //concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);
+            //concurrent_ds_scale_out::<RcuHashMap>(&mut harness, "urcu", write_ratio);
             concurrent_ds_scale_out::<DashWrapper>(&mut harness, "dashmap", write_ratio);
         }
     }

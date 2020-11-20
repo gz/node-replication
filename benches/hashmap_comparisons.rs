@@ -156,7 +156,9 @@ impl Dispatch for CHashMapWrapper {
             OpConcurrent::Put(key, val) => {
                 self.0.insert(key, val);
                 Ok(None)
-            }
+            },
+            // TODO(irina): add meaningful Len
+            OpConcurrent::Len() => Ok(None)
         }
     }
 
@@ -191,6 +193,11 @@ impl Dispatch for StdWrapper {
                 self.0.write().insert(key, val);
                 Ok(None)
             }
+            OpConcurrent::Len() => {
+              let ret: u64 = self.0.read().len() as u64;
+              println!("calling Std::hashmap::Len {}", ret);
+              Ok(Some(ret))
+            }
         }
     }
 
@@ -224,7 +231,9 @@ impl Dispatch for FlurryWrapper {
             OpConcurrent::Put(key, val) => {
                 self.0.pin().insert(key, val);
                 Ok(None)
-            }
+            },
+            // TODO(irina): add meaningful Len
+            OpConcurrent::Len() => Ok(None)
         }
     }
 
@@ -258,6 +267,11 @@ impl Dispatch for DashWrapper {
             OpConcurrent::Put(key, val) => {
                 self.0.insert(key, val);
                 Ok(None)
+            }
+            OpConcurrent::Len() => {
+                let ret: u64 = self.0.len() as u64;
+                println!("calling Dash::hashmap::Len {}", ret);
+                Ok(Some(ret))
             }
         }
     }
@@ -414,7 +428,9 @@ impl Dispatch for RcuHashMap {
                         std::alloc::dealloc(old_node as *mut u8, layout);
                     }
                     Ok(None)
-                }
+                },
+                // TODO(irina): add meaningful Len
+                OpConcurrent::Len() => Ok(None)
             }
         }
     }

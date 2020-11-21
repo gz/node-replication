@@ -432,13 +432,14 @@ where
             if advance {
                 self.advance_head(idx, &mut s);
             }
-            
+
             return entry;
         }
     }
 
     // TODO(irina): Get rid of this function and use replica instead of alivef to block threads
     // from the same replica; alivef blocks threads from ALL replicas, which is more than we need.
+    #[cfg(feature = "scan")]
     #[inline(always)]
     #[doc(hidden)]
     pub fn append_unfinished<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) -> usize {
@@ -520,6 +521,7 @@ where
         }
     }
 
+    #[cfg(feature = "scan")]
     pub fn fix_scan_entry(&self, entry: usize) {
         // TODO(irina): check entry is valid >= 0 < LOG SIZE
         // TODO(irina): check slog[entry].operation == SCAN

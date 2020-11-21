@@ -5,7 +5,6 @@
 #![feature(test)]
 #![feature(get_mut_unchecked)]
 
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::Sync;
 
@@ -21,7 +20,9 @@ mod hashmap_comparisons;
 mod mkbench;
 mod utils;
 
+#[cfg(feature = "cmp")]
 use hashmap_comparisons::*;
+
 use mkbench::ReplicaTrait;
 use utils::benchmark::*;
 use utils::topology::ThreadMapping;
@@ -116,7 +117,7 @@ impl NrHashMap {
 impl Default for NrHashMap {
     /// Return a dummy hash-map with `INITIAL_CAPACITY` elements.
     fn default() -> NrHashMap {
-        let mut storage = dashmap::DashMap::with_capacity(INITIAL_CAPACITY);
+        let storage = dashmap::DashMap::with_capacity(INITIAL_CAPACITY);
         for i in 0..INITIAL_CAPACITY {
             storage.insert(i as u64, (i + 1) as u64);
         }
@@ -297,6 +298,7 @@ where
         );
 }
 
+#[cfg(feature = "cmp")]
 /// Compare scale-out behaviour of partitioned hashmap data-structure.
 fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: usize) {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
@@ -322,6 +324,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
         );
 }
 
+#[cfg(feature = "cmp")]
 fn concurrent_ds_scale_out<T>(c: &mut TestHarness, name: &str, write_ratio: usize)
 where
     T: Dispatch<ReadOperation = OpConcurrent>,

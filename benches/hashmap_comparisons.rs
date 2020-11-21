@@ -38,9 +38,9 @@ where
 {
     type D = T;
 
-    fn sync_log(&self, idx: ReplicaToken, logid: usize) {}
+    fn sync_log(&self, _idx: ReplicaToken, _logid: usize) {}
 
-    fn new_arc(log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
+    fn new_arc(_log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
         Arc::new(Partitioner {
             registered: AtomicUsize::new(0),
             data_structure: UnsafeCell::new(T::default()),
@@ -97,14 +97,14 @@ where
 {
     type D = T;
 
-    fn new_arc(log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
+    fn new_arc(_log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
             data_structure: T::default(),
         })
     }
 
-    fn sync_log(&self, idx: ReplicaToken, logid: usize) {}
+    fn sync_log(&self, _idx: ReplicaToken, _logid: usize) {}
 
     fn register_me(&self) -> Option<ReplicaToken> {
         let rt = unsafe { ReplicaToken::new(self.registered.fetch_add(1, Ordering::SeqCst)) };

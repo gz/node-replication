@@ -504,6 +504,7 @@ where
         self.read_only(op, idx.0)
     }
 
+    #[cfg(feature = "scan")]
     // TODO(irina): Currently only handling a single hash;
     // scan operation needs to support more than one log
     pub fn execute_scan(
@@ -621,6 +622,7 @@ where
         self.data.dispatch(op)
     }
 
+    #[cfg(feature = "scan")] 
     fn local_scan(
         &self,
         //op: <D as Dispatch>::ScanOperation,
@@ -702,6 +704,7 @@ where
         self.release_fc_lock(hashidx);
     }
 
+    #[cfg(feature = "scan")]
     fn try_update_to(&self, tid: usize, hashidx: usize, toentry: usize) {
         if !self.try_fc_lock(tid, hashidx) {
             return;
@@ -713,6 +716,7 @@ where
         self.release_fc_lock(hashidx);
     }
 
+    #[cfg(feature = "scan")]
     #[inline(always)]
     fn append_scan_to_logs(&self, op: <D as Dispatch>::WriteOperation, hashidx: usize) -> usize {
         /* Re-executing the scan from the log is not necessary */
@@ -785,6 +789,7 @@ where
     }
 
     /// Updates from log. Must hold the FC lock
+    #[cfg(feature = "scan")]
     #[inline(always)]
     fn update_to(&self, hashidx: usize, toentry: usize) {
         // Execute any operations on the shared log against this replica.
@@ -795,7 +800,7 @@ where
             self.slog[hashidx].exec_to(self.idx[hashidx], toentry, &mut f);
         }
     }
-}
+  }
 
 #[cfg(test)]
 mod test {

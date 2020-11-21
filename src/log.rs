@@ -432,7 +432,7 @@ where
             if advance {
                 self.advance_head(idx, &mut s);
             }
-
+            
             return entry;
         }
     }
@@ -791,6 +791,7 @@ where
         self.ltails[idx - 1].load(Ordering::Relaxed) >= ctail
     }
 
+    #[cfg(feature = "scan")]
     #[inline(always)]
     pub(crate) fn is_replica_synced_for_scans(&self, idx: usize, scan_entry_idx: usize) -> bool {
         self.ltails[idx - 1].load(Ordering::Relaxed) == scan_entry_idx

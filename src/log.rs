@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::alloc::{alloc, dealloc, Layout};
-
 use core::cell::{Cell, UnsafeCell};
 use core::default::Default;
 use core::fmt;
@@ -26,7 +25,7 @@ const_assert!(DEFAULT_LOG_BYTES >= 1 && (DEFAULT_LOG_BYTES & (DEFAULT_LOG_BYTES 
 const MAX_REPLICAS: usize = 192;
 
 /// The maximum number of replicas that is used in bespin for mlnrfs.
-const MAX_REPLICAS_BESPIN: usize = 4;
+pub const MAX_REPLICAS_BESPIN: usize = 4;
 
 /// Constant required for garbage collection. When the tail and the head are
 /// these many entries apart on the circular buffer, garbage collection will
@@ -136,10 +135,14 @@ where
     lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS],
 
     /// Callback function
-    gc: UnsafeCell<*const dyn FnMut(usize, usize)>,
+    gc: UnsafeCell<*const dyn FnMut(&[AtomicBool; MAX_REPLICAS_BESPIN], usize)>,
 
-    ///
+    /// Check if the log can issue a GC callback; reset
+    /// after the GC is done in `advance_head` function.
     send_ipi: CachePadded<AtomicBool>,
+
+    /// Use this bitarray in GC callback function to notify other replicas to make progress.
+    dormant_replicas: [AtomicBool; MAX_REPLICAS_BESPIN],
 }
 
 impl<'a, T> fmt::Debug for Log<'a, T>
@@ -251,8 +254,9 @@ where
             ltails: arr![Default::default(); 192],
             next: CachePadded::new(AtomicUsize::new(1usize)),
             lmasks: fls,
-            gc: UnsafeCell::new(&|_lid: usize, _rid: usize| {}),
+            gc: UnsafeCell::new(&|_lid: &[AtomicBool; MAX_REPLICAS_BESPIN], _rid: usize| {}),
             send_ipi: CachePadded::new(AtomicBool::new(true)),
+            dormant_replicas: arr![Default::default(); 4],
         }
     }
 
@@ -261,7 +265,7 @@ where
         size_of::<Cell<Entry<T>>>()
     }
 
-    pub fn update_closure(&mut self, gc: &dyn FnMut(usize, usize)) {
+    pub fn update_closure(&mut self, gc: &dyn FnMut(&[AtomicBool], usize)) {
         unsafe { *self.gc.get() = core::mem::transmute(gc) };
     }
 
@@ -381,7 +385,7 @@ where
             let used = tail - head + 1;
 
             if self.idx != 1 && (used > self.size / 2) {
-                let mut dormant_replica = 0;
+                let mut is_stuck = false;
                 let r = self.next.load(Ordering::Relaxed);
                 let mut min_local_tail = self.ltails[0].load(Ordering::Relaxed);
 
@@ -389,20 +393,21 @@ where
                 for idx in 1..r {
                     let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
                     if min_local_tail > cur_local_tail {
-                        dormant_replica = idx;
+                        self.dormant_replicas[idx - 1].store(true, Ordering::Relaxed);
+                        is_stuck = true;
                         min_local_tail = cur_local_tail
                     };
                 }
 
-                if dormant_replica > 0
+                if is_stuck == true
                     && self
                         .send_ipi
                         .compare_and_swap(true, false, Ordering::Relaxed)
                         == true
                 {
-                    let f: &mut dyn FnMut(usize, usize) =
-                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(usize, usize)) };
-                    f(self.idx, dormant_replica);
+                    let f: &mut dyn FnMut(&[AtomicBool], usize) =
+                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(&[AtomicBool], usize)) };
+                    f(&self.dormant_replicas, self.idx);
                 }
             }
 

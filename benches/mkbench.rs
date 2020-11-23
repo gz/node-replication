@@ -19,13 +19,13 @@ use std::io::Write;
 use std::marker::{PhantomData, Send, Sync};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc, Barrier, Mutex};
+use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering, Arc, Barrier, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use csv::WriterBuilder;
 use log::*;
-use mlnr::{Dispatch, Log, Replica, ReplicaToken};
+use mlnr::{Dispatch, Log, Replica, ReplicaToken, MAX_REPLICAS_BESPIN};
 use rand::seq::SliceRandom;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
@@ -609,9 +609,13 @@ where
 
     fn startup(&mut self) {
         let stuck = Arc::new(arr![AtomicUsize::new(0); 128]);
-        let func = &|idx: usize, rid: usize| {
+        let func = &|rid: &[AtomicBool], idx: usize| {
             let stuck = stuck.clone();
-            stuck[rid - 1].compare_and_swap(0, idx, Ordering::Release);
+            for replica in 0..MAX_REPLICAS_BESPIN {
+                if rid[replica].load(Ordering::Relaxed) == true {
+                    stuck[replica].compare_and_swap(0, idx, Ordering::Release);
+                }
+            }
         };
         let nlogs = self.log.len();
         for i in 0..nlogs {

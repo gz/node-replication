@@ -614,6 +614,7 @@ where
             for replica in 0..MAX_REPLICAS_BESPIN {
                 if rid[replica].load(Ordering::Relaxed) == true {
                     stuck[replica].compare_and_swap(0, idx, Ordering::Release);
+                    rid[replica].store(false, Ordering::Relaxed);
                 }
             }
         };

@@ -142,6 +142,7 @@ where
     send_ipi: CachePadded<AtomicBool>,
 
     /// Use this bitarray in GC callback function to notify other replicas to make progress.
+    /// Assumes that the callback handler clears the replica-ids which need to do GC.
     dormant_replicas: [AtomicBool; MAX_REPLICAS_BESPIN],
 }
 
@@ -385,18 +386,17 @@ where
             let used = tail - head + 1;
 
             if self.idx != 1 && (used > self.size / 2) {
-                let mut is_stuck = false;
                 let r = self.next.load(Ordering::Relaxed);
-                let mut min_local_tail = self.ltails[0].load(Ordering::Relaxed);
+                let mut is_stuck = false;
+                let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
 
                 // Find the smallest local tail across all replicas.
                 for idx in 1..r {
-                    let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
-                    if min_local_tail > cur_local_tail {
+                    let local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+                    if cur_local_tail > local_tail && cur_local_tail - local_tail > self.size / 3 {
                         self.dormant_replicas[idx - 1].store(true, Ordering::Relaxed);
                         is_stuck = true;
-                        min_local_tail = cur_local_tail
-                    };
+                    }
                 }
 
                 if is_stuck == true
@@ -594,22 +594,28 @@ where
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.
         let mut iteration = 1;
-        let mut dormant_rid;
         loop {
-            dormant_rid = 1;
             let r = self.next.load(Ordering::Relaxed);
             let global_head = self.head.load(Ordering::Relaxed);
             let f = self.tail.load(Ordering::Relaxed);
 
             let mut min_local_tail = self.ltails[0].load(Ordering::Relaxed);
+            let self_local_tail = self.ltails[rid - 1].load(Ordering::Relaxed);
 
             // Find the smallest local tail across all replicas.
             for idx in 1..r {
                 let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+                // Needed for actual GC.
                 if min_local_tail > cur_local_tail {
-                    dormant_rid = idx;
                     min_local_tail = cur_local_tail
-                };
+                }
+
+                // Needed for callback function.
+                if self_local_tail > cur_local_tail
+                    && self_local_tail - cur_local_tail > self.size / 2
+                {
+                    self.dormant_replicas[idx - 1].store(true, Ordering::Relaxed);
+                }
             }
 
             // If we cannot advance the head further, then start
@@ -623,9 +629,9 @@ where
                         .compare_and_swap(true, false, Ordering::Relaxed)
                         == true
                 {
-                    let f: &mut dyn FnMut(usize, usize) =
-                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(usize, usize)) };
-                    f(self.idx, dormant_rid);
+                    let f: &mut dyn FnMut(&[AtomicBool], usize) =
+                        unsafe { &mut *(*self.gc.get() as *mut dyn FnMut(&[AtomicBool], usize)) };
+                    f(&self.dormant_replicas, self.idx);
                 }
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
@@ -952,7 +958,7 @@ mod tests {
         l.ltails[2].store(4096, Ordering::Relaxed);
         l.ltails[3].store(799, Ordering::Relaxed);
 
-        l.advance_head(0, &mut |_o: Operation, _i: usize| {});
+        l.advance_head(1, &mut |_o: Operation, _i: usize| {});
         assert_eq!(l.head.load(Ordering::Relaxed), 224);
     }
 

@@ -79,6 +79,12 @@ pub trait ReplicaTrait {
         op: <Self::D as Dispatch>::ReadOperation,
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
+
+    fn exec_scan(
+      &self,
+      op: <Self::D as Dispatch>::WriteOperation,
+      idx: ReplicaToken,
+  ) -> <Self::D as Dispatch>::Response;
 }
 
 impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
@@ -115,6 +121,14 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
     ) -> <Self::D as Dispatch>::Response {
         self.execute(op, idx)
     }
+
+    fn exec_scan(
+      &self,
+      op: <Self::D as Dispatch>::WriteOperation,
+      idx: ReplicaToken,
+  ) -> <Self::D as Dispatch>::Response {
+      self.execute_scan(op, idx)
+  }
 }
 
 /// Log the baseline comparision results to a CSV file
@@ -206,6 +220,9 @@ pub(crate) fn baseline_comparison<R: ReplicaTrait>(
                     Operation::WriteOperation(o) => {
                         s.dispatch_mut(o.clone());
                     }
+                    Operation::ScanOperation(o) => {
+                        s.dispatch_mut(o.clone());
+                    }
                 }
                 operations_completed += 1;
                 iter += 1;
@@ -258,6 +275,9 @@ pub(crate) fn baseline_comparison<R: ReplicaTrait>(
                     }
                     Operation::WriteOperation(op) => {
                         r.exec(op.clone(), ridx);
+                    }
+                    Operation::ScanOperation(op) => {
+                      r.exec_scan(op.clone(), ridx);
                     }
                 }
                 operations_completed += 1;

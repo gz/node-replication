@@ -32,6 +32,7 @@ pub struct Partitioner<T: Dispatch> {
 // This implies we have to run with `ReplicaStrategy::PerThread`.
 unsafe impl<T> Sync for Partitioner<T> where T: Dispatch + Default + Sync {}
 
+#[cfg(feature = "cmp")]
 impl<T> ReplicaTrait for Partitioner<T>
 where
     T: Dispatch + Default + Sync,
@@ -84,13 +85,16 @@ where
 /// Useful to compare against the competition.
 ///
 /// Obviously this makes the most sense when run with `ReplicaStrategy::One`.
+#[cfg(feature = "cmp")]
 pub struct ConcurrentDs<T: Dispatch + Sync> {
     registered: AtomicUsize,
     data_structure: T,
 }
 
+#[cfg(feature = "cmp")]
 unsafe impl<T> Sync for ConcurrentDs<T> where T: Dispatch + Default + Sync {}
 
+#[cfg(feature = "cmp")]
 impl<T> ReplicaTrait for ConcurrentDs<T>
 where
     T: Dispatch + Default + Sync,
@@ -133,8 +137,10 @@ where
 }
 
 /// chashmap implementation
+#[cfg(feature = "cmp")]
 pub struct CHashMapWrapper(chashmap::CHashMap<u64, u64>);
 
+#[cfg(feature = "cmp")]
 impl Default for CHashMapWrapper {
     fn default() -> Self {
         let storage = chashmap::CHashMap::with_capacity(INITIAL_CAPACITY);
@@ -145,6 +151,7 @@ impl Default for CHashMapWrapper {
     }
 }
 
+#[cfg(feature = "cmp")]
 impl Dispatch for CHashMapWrapper {
     type ReadOperation = OpConcurrent;
     type WriteOperation = OpConcurrent;
@@ -169,8 +176,10 @@ impl Dispatch for CHashMapWrapper {
 }
 
 /// rwlock<hashmap> implementation
+#[cfg(feature = "cmp")]
 pub struct StdWrapper(parking_lot::RwLock<std::collections::HashMap<u64, u64>>);
 
+#[cfg(feature = "cmp")]
 impl Default for StdWrapper {
     fn default() -> Self {
         let mut storage = std::collections::HashMap::with_capacity(INITIAL_CAPACITY);
@@ -181,6 +190,7 @@ impl Default for StdWrapper {
     }
 }
 
+#[cfg(feature = "cmp")]
 impl Dispatch for StdWrapper {
     type ReadOperation = OpConcurrent;
     type WriteOperation = OpConcurrent;
@@ -208,8 +218,10 @@ impl Dispatch for StdWrapper {
 }
 
 /// flurry implementation
+#[cfg(feature = "cmp")]
 pub struct FlurryWrapper(flurry::HashMap<u64, u64>);
 
+#[cfg(feature = "cmp")]
 impl Default for FlurryWrapper {
     fn default() -> Self {
         let storage = flurry::HashMap::with_capacity(INITIAL_CAPACITY);
@@ -220,6 +232,7 @@ impl Default for FlurryWrapper {
     }
 }
 
+#[cfg(feature = "cmp")]
 impl Dispatch for FlurryWrapper {
     type ReadOperation = OpConcurrent;
     type WriteOperation = OpConcurrent;
@@ -244,8 +257,10 @@ impl Dispatch for FlurryWrapper {
 }
 
 /// dashmap implementation
+#[cfg(feature = "cmp")]
 pub struct DashWrapper(dashmap::DashMap<u64, u64>);
 
+#[cfg(feature = "cmp")]
 impl Default for DashWrapper {
     fn default() -> Self {
         let storage = dashmap::DashMap::with_capacity(INITIAL_CAPACITY);
@@ -256,6 +271,7 @@ impl Default for DashWrapper {
     }
 }
 
+#[cfg(feature = "cmp")]
 impl Dispatch for DashWrapper {
     type ReadOperation = OpConcurrent;
     type WriteOperation = OpConcurrent;
@@ -283,13 +299,18 @@ impl Dispatch for DashWrapper {
 }
 
 // rcu wrapper
+#[cfg(feature = "cmp")]
 pub struct RcuHashMap {
     test_ht: *mut urcu_sys::cds_lfht,
 }
 
+#[cfg(feature = "cmp")]
 unsafe impl Sync for RcuHashMap {}
+
+#[cfg(feature = "cmp")]
 unsafe impl Send for RcuHashMap {}
 
+#[cfg(feature = "cmp")]
 impl Default for RcuHashMap {
     fn default() -> Self {
         unsafe {
@@ -313,6 +334,7 @@ impl Default for RcuHashMap {
     }
 }
 
+#[cfg(feature = "cmp")]
 impl Drop for RcuHashMap {
     fn drop(&mut self) {
         // Welcome to C land:
@@ -367,6 +389,7 @@ unsafe fn to_test_node(node: *mut urcu_sys::cds_lfht_node) -> *mut lfht_test_nod
     mem::transmute(node)
 }
 
+#[cfg(feature = "cmp")]
 impl Dispatch for RcuHashMap {
     type ReadOperation = OpConcurrent;
     type WriteOperation = OpConcurrent;

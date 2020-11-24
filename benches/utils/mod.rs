@@ -14,6 +14,7 @@ pub mod topology;
 pub enum Operation<R: Sized + Clone + PartialEq + Debug, W: Sized + Clone + PartialEq + Debug> {
     ReadOperation(R),
     WriteOperation(W),
+    ScanOperation(W)
 }
 
 /// Type to identify an OS thread.

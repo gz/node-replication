@@ -92,9 +92,9 @@ impl LogMapper for OpConcurrent {
     }
 }
 
-/// Single-threaded implementation of the stack
+/// Original concurrent hashmap
 ///
-/// We just use a vector.
+/// We just use a dashmap.
 #[derive(Debug, Clone)]
 pub struct NrHashMap {
     storage: dashmap::DashMap<u64, u64>,
@@ -166,8 +166,8 @@ pub fn generate_operations(
     assert!(distribution == "skewed" || distribution == "uniform");
 
     // TODO(irina): scan_ratio
-    //const SCAN_RATIO: usize = 10;
-    const SCAN_RATIO: usize = 0;
+    const SCAN_RATIO: usize = 10;
+    //const SCAN_RATIO: usize = 0;
     let mut ops = Vec::with_capacity(nop);
 
     let skewed = distribution == "skewed";
@@ -183,7 +183,7 @@ pub fn generate_operations(
         };
 
         if idx % 100 < SCAN_RATIO {
-          ops.push(Operation::WriteOperation(OpWr::Len()));
+          ops.push(Operation::ScanOperation(OpWr::Len()));
         } else if idx % 100 < write_ratio {
             ops.push(Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64())));
         } else {
@@ -293,6 +293,9 @@ where
                 }
                 Operation::WriteOperation(op) => {
                     replica.exec(*op, rid);
+                }
+                Operation::ScanOperation(op) => {
+                    replica.exec_scan(*op, rid);
                 }
             },
         );

@@ -519,7 +519,7 @@ where
         let entry = self.append_scan_to_logs(op.clone(), hash);
 
         // Execute local scan, waiting for replica to be up to date
-        let resp = self.local_scan(op, idx.0, entry);
+        let resp = self.local_scan(op, idx.0, hash, entry);
 
         // Fix scan log entries
         self.slog[hash].fix_scan_entry(entry);
@@ -625,13 +625,12 @@ where
         //op: <D as Dispatch>::ScanOperation,
         op: <D as Dispatch>::WriteOperation,
         tid: usize,
+        log_idx: usize,
         scan_entry_idx: usize,
     ) -> <D as Dispatch>::Response {
-        let hash_idx = op.hash() % self.slog.len();
-
         /* wait for a combiner to update, or do the update here if there is no combiner */
-        while !self.slog[hash_idx].is_replica_synced_for_scans(self.idx[hash_idx], scan_entry_idx) {
-            self.try_update_to(tid, hash_idx, scan_entry_idx);
+        while !self.slog[log_idx].is_replica_synced_for_scans(self.idx[log_idx], scan_entry_idx) {
+            self.try_update_to(tid, log_idx, scan_entry_idx);
             spin_loop_hint();
         }
 

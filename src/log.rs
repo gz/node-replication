@@ -407,8 +407,8 @@ where
 
             // Successfully reserved entries on the shared log. Add the operations in.
             for i in 0..nops {
-                let eidx = self.index(tail + i);
-                let e = self.slog[eidx].as_ptr();
+                let eidx = tail + i;
+                let e = self.slog[self.index(eidx)].as_ptr();
                 let mut m = self.lmasks[idx - 1].get();
 
                 // This entry was just reserved so it should be dead (!= m). However, if
@@ -444,6 +444,7 @@ where
     #[doc(hidden)]
     pub fn append_unfinished<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) -> usize {
         let nops = ops.len();
+        assert_eq!(nops, 1);
         let mut iteration = 1;
         let mut waitgc = 1;
         let mut entry = 0;
@@ -501,8 +502,8 @@ where
 
             // Successfully reserved entries on the shared log. Add the operations in.
             for i in 0..nops {
-                let eidx = self.index(tail + i);
-                let e = self.slog[eidx].as_ptr();
+                let eidx = tail + i;
+                let e = self.slog[self.index(eidx)].as_ptr();
 
                 unsafe { (*e).operation = Some(ops[i].clone()) };
                 unsafe { (*e).replica = idx };
@@ -525,7 +526,7 @@ where
     pub fn fix_scan_entry(&self, entry: usize) {
         // TODO(irina): check entry is valid >= 0 < LOG SIZE
         // TODO(irina): check slog[entry].operation == SCAN
-        let e = self.slog[entry].as_ptr();
+        let e = self.slog[self.index(entry)].as_ptr();
         // TODO(irina): Right now we fix the entry by correcting alivef
         // Need to transition this to use the replica instead, so that we only block threads on our replica
         //unsafe { (*e).replica = MAX_REPLICAS };
@@ -600,7 +601,7 @@ where
 
         // Make sure we're within the shared log. If we aren't, then panic.
         if l > t || l < h {
-            panic!("Local tail not within the shared log!")
+            panic!("Local tail not within the shared log! {} {} {}", h, t, l)
         };
 
         // Execute all operations from the passed in offset to the shared log's tail. Check if

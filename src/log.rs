@@ -608,10 +608,23 @@ where
         // the entry is live first; we could have a replica that has reserved entries, but not
         // filled them into the log yet.
         for i in l..t {
+            let mut update_ltail = true;
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
             while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[my_replica].get() } {
+                if (iteration % 100 == 0) && (update_ltail) {
+                  // TODO(irina): In the future, we want to check if we are being kept here by 
+                  // a ScanOperation; if so, then update ltail. Right now all ops are WriteOperations, 
+                  // so we cannot easily distinguish scans. 
+
+                  // Periodically update ltail in case SCANs or READs are waiting 
+                  let lt = self.ltails[idx - 1].load(Ordering::Relaxed);
+                  if lt != i {
+                    self.ltails[idx - 1].store(i, Ordering::Relaxed);
+                  }
+                  update_ltail = false;
+                }
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",

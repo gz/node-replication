@@ -136,7 +136,7 @@ impl Dispatch for NrHashMap {
         }
     }
 
-    /// Implements how we execute operation from the log against our local stack
+    /// Implements how we execute operation from the log against our local hashmap
     fn dispatch_mut(&self, op: Self::WriteOperation) -> Self::Response {
         match op {
             OpWr::Put(key, val) => {
@@ -144,7 +144,9 @@ impl Dispatch for NrHashMap {
                 Ok(None)
             }
             OpWr::Len() => {
-                Ok(Some(self.len()))
+                let len = self.len();
+                assert_eq!(len, INITIAL_CAPACITY as u64);
+                Ok(Some(len))
             }
         }
     }

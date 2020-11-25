@@ -168,7 +168,7 @@ pub fn generate_operations(
     assert!(distribution == "skewed" || distribution == "uniform");
 
     // TODO(irina): scan_ratio
-    const SCAN_RATIO: usize = 10;
+    const SCAN_RATIO: usize = 1;
     //const SCAN_RATIO: usize = 0;
     let mut ops = Vec::with_capacity(nop);
 
@@ -325,6 +325,9 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
                 Operation::WriteOperation(op) => {
                     replica.exec(*op, rid).unwrap();
                 }
+                Operation::ScanOperation(op) => {
+                    replica.exec_scan(*op, rid).unwrap();
+                }
             },
         );
 }
@@ -357,6 +360,9 @@ where
                 Operation::WriteOperation(op) => {
                     replica.exec(*op, rid);
                 }
+                Operation::ScanOperation(op) => {
+                    replica.exec_scan(*op, rid);
+                }
             },
         );
 }
@@ -373,7 +379,7 @@ fn main() {
     // TODO(irina):
     //let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
     // Scan - first 10%,  write is only (R-10): [10, 30]
-    let write_ratios = vec![40];
+    let write_ratios = vec![10];
 
     unsafe {
         urcu_sys::rcu_init();

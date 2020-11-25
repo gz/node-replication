@@ -186,7 +186,7 @@ pub fn generate_operations(
 
         if idx % 100 < SCAN_RATIO {
           ops.push(Operation::ScanOperation(OpWr::Len()));
-        } else if idx % 100 < write_ratio {
+        } else if idx % 100 < write_ratio + SCAN_RATIO {
             ops.push(Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64())));
         } else {
             ops.push(Operation::ReadOperation(OpRd::Get(id)));
@@ -231,7 +231,7 @@ pub fn generate_operations_concurrent(
 
         if idx % 100 < SCAN_RATIO {
             ops.push(Operation::ReadOperation(OpConcurrent::Len()));
-        } else if idx % 100 < write_ratio {
+        } else if idx % 100 < write_ratio + SCAN_RATIO {
             ops.push(Operation::ReadOperation(OpConcurrent::Put(
                 id,
                 t_rng.next_u64(),

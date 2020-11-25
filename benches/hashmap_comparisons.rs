@@ -77,6 +77,14 @@ where
     ) -> <T as Dispatch>::Response {
         unsafe { (&*self.data_structure.get()).dispatch(op) }
     }
+
+    fn exec_scan(
+      &self,
+      _op: <Self::D as Dispatch>::WriteOperation,
+      _idx: ReplicaToken,
+  ) -> <Self::D as Dispatch>::Response {
+      unreachable!("All operations must be read ops")
+  }
 }
 
 /// A wrapper that implements ReplicaTrait which just submits everything against
@@ -124,7 +132,7 @@ where
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
-        unreachable!("All opertations must be read ops")
+        unreachable!("All operations must be read ops")
     }
 
     fn exec_ro(
@@ -134,6 +142,14 @@ where
     ) -> <Self::D as Dispatch>::Response {
         self.data_structure.dispatch(op)
     }
+
+    fn exec_scan(
+      &self,
+      _op: <Self::D as Dispatch>::WriteOperation,
+      _idx: ReplicaToken,
+  ) -> <Self::D as Dispatch>::Response {
+      unreachable!("All operations must be read ops")
+  }
 }
 
 /// chashmap implementation

@@ -505,7 +505,9 @@ where
                 let eidx = tail + i;
                 let e = self.slog[self.index(eidx)].as_ptr();
 
-                unsafe { (*e).operation = Some(ops[i].clone()) };
+                //unsafe { (*e).operation = Some(ops[i].clone()) };
+                /* A scan doesn't need to be repeated on each replica, so we don't include the op */
+                unsafe { (*e).operation = None };
                 unsafe { (*e).replica = idx };
                 /* We don't set alivef for scan operations until after the scan is done */
                 if i == 0 {
@@ -637,7 +639,11 @@ where
                 iteration += 1;
             }
 
-            unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
+            unsafe {
+                if (*e).operation.is_some() {
+                    d((*e).operation.as_ref().unwrap().clone(), (*e).replica)
+                }
+            };
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {

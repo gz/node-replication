@@ -516,10 +516,17 @@ where
         let hash = op.hash() % self.slog.len();
 
         // Append the scan op in the logs
+        /* Due to how append works in log.rs, append_unfinished needs to hold
+        the combiner lock. This is very sad. */
+        self.acquire_fc_lock(idx.0, hash);
+
         let entry = self.append_scan_to_logs(op.clone(), hash);
 
         // Execute local scan, waiting for replica to be up to date
         let resp = self.local_scan(op, idx.0, hash, entry);
+
+        /* Very sad. */
+        self.release_fc_lock(hash);
 
         // Fix scan log entries
         self.slog[hash].fix_scan_entry(entry);
@@ -629,10 +636,15 @@ where
         scan_entry_idx: usize,
     ) -> <D as Dispatch>::Response {
         /* wait for a combiner to update, or do the update here if there is no combiner */
+        /*
         while !self.slog[log_idx].is_replica_synced_for_scans(self.idx[log_idx], scan_entry_idx) {
             self.try_update_to(tid, log_idx, scan_entry_idx);
             spin_loop_hint();
         }
+        */
+
+        /* We already hold the combiner lock :( */
+        self.update_to(log_idx, scan_entry_idx);
 
         // TODO(irina): Scan is not a mutable operation, but right now we need this to put on the log
         //self.data.dispatch_scan(op)
@@ -679,6 +691,10 @@ where
         return true;
     }
 
+    fn acquire_fc_lock(&self, tid:usize, hashidx: usize) {
+        while !self.try_fc_lock(tid, hashidx) {};      
+    }
+
     fn release_fc_lock(&self, hashidx: usize) {
         // Allow other threads to perform flat combining once we have finished all our work.
         // At this point, we've dropped all mutable references to thread contexts and to
@@ -714,8 +730,14 @@ where
     #[cfg(feature = "scan")]
     #[inline(always)]
     fn append_scan_to_logs(&self, op: <D as Dispatch>::WriteOperation, hashidx: usize) -> usize {
-        /* Re-executing the scan from the log is not necessary */
-        let f = |_o: <D as Dispatch>::WriteOperation, _i: usize| {};
+        /* We still need the closure for GC; applies other operations from the log */
+        let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+            self.data.dispatch_mut(o);
+            if i == self.idx[hashidx] {
+                //results.push(resp);
+                panic!("GC during Scan executed current combiner ops!");
+          }
+        };
         // TODO(irina): we block everyone right now, change this to only block threads from the same replica
         //self.slog[hashidx].append(&[op], self.idx[hashidx], f)
         self.slog[hashidx].append_unfinished(&[op], self.idx[hashidx], f)
@@ -750,6 +772,9 @@ where
                 let resp = self.data.dispatch_mut(o);
                 if i == self.idx[hashidx] {
                     results.push(resp);
+                    /* We shouldn't find *prior operations on the log that didn't return 
+                    a response yet. However, during GC, we call exec, which could execute 
+                    past current ops. */
                 }
             };
             self.slog[hashidx].append(&buffer, self.idx[hashidx], f);
@@ -760,6 +785,7 @@ where
             let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
                 let resp = self.data.dispatch_mut(o);
                 if i == self.idx[hashidx] {
+                    /* This is for currently added ops */
                     results.push(resp)
                 };
             };

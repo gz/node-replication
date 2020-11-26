@@ -59,7 +59,10 @@ pub enum OpWr {
 
 impl LogMapper for OpWr {
     fn hash(&self) -> usize {
-        0
+        match self {
+          OpWr::Put(key, _val) => *key as usize,
+          OpWr::Len() => usize::MAX,
+        }
     }
 }
 
@@ -71,7 +74,9 @@ pub enum OpRd {
 
 impl LogMapper for OpRd {
     fn hash(&self) -> usize {
-        0
+        match self {
+          OpRd::Get(key) => *key as usize,
+        }
     }
 }
 

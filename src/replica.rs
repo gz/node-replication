@@ -355,6 +355,14 @@ where
         }
     }
 
+    fn get_log(&self, op: <D as Dispatch>::WriteOperation) -> usize {
+        op.hash() % self.slog.len()
+    }
+
+    fn get_log_read(&self, op: <D as Dispatch>::ReadOperation) -> usize {
+      op.hash() % self.slog.len()
+    }
+
     /// Executes an mutable operation against this replica and returns a response.
     /// `idx` is an identifier for the thread performing the execute operation.
     ///
@@ -421,16 +429,16 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let hash = op.hash() % self.slog.len();
+        let log_idx = self.get_log(op.clone());
 
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.make_pending(op.clone(), idx.0, hash);
+        self.make_pending(op.clone(), idx.0, log_idx);
 
         // A thread becomes combiner for operations with hash same as its own operation.
-        self.try_combine(idx.0, hash);
+        self.try_combine(idx.0, log_idx);
 
         // Return the response to the caller function.
-        self.get_response(idx.0, hash)
+        self.get_response(idx.0, log_idx)
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -513,23 +521,23 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let hash = op.hash() % self.slog.len();
+        let log_idx = self.get_log(op.clone());
 
         // Append the scan op in the logs
         /* Due to how append works in log.rs, append_unfinished needs to hold
         the combiner lock. This is very sad. */
-        self.acquire_fc_lock(idx.0, hash);
+        self.acquire_fc_lock(idx.0, log_idx);
 
-        let entry = self.append_scan_to_logs(op.clone(), hash);
+        let entry = self.append_scan_to_logs(op.clone(), log_idx);
 
         // Execute local scan, waiting for replica to be up to date
-        let resp = self.local_scan(op, idx.0, hash, entry);
+        let resp = self.local_scan(op, idx.0, log_idx, entry);
 
         /* Very sad. */
-        self.release_fc_lock(hash);
+        self.release_fc_lock(log_idx);
 
         // Fix scan log entries
-        self.slog[hash].fix_scan_entry(entry);
+        self.slog[log_idx].fix_scan_entry(entry);
 
         // Return scan's result
         resp
@@ -613,13 +621,13 @@ where
         op: <D as Dispatch>::ReadOperation,
         tid: usize,
     ) -> <D as Dispatch>::Response {
-        let hash_idx = op.hash() % self.slog.len();
+        let log_idx = self.get_log_read(op.clone());
 
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
-        let ctail = self.slog[hash_idx].get_ctail();
-        while !self.slog[hash_idx].is_replica_synced_for_reads(self.idx[hash_idx], ctail) {
-            self.try_combine(tid, hash_idx);
+        let ctail = self.slog[log_idx].get_ctail();
+        while !self.slog[log_idx].is_replica_synced_for_reads(self.idx[log_idx], ctail) {
+            self.try_combine(tid, log_idx);
             spin_loop_hint();
         }
 

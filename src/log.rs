@@ -348,7 +348,7 @@ where
     /// used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) -> usize {
+    pub fn append<F: FnMut(bool)>(&self, ops: &[T], idx: usize, mut wait_gc: F) -> usize {
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
@@ -384,7 +384,8 @@ where
                     );
                 }
                 waitgc += 1;
-                self.exec(idx, &mut s);
+                //self.exec(idx, &mut s);
+                wait_gc(true);
                 continue;
             }
 
@@ -430,7 +431,7 @@ where
 
             // If needed, advance the head of the log forward to make room on the log.
             if advance {
-                self.advance_head(idx, &mut s);
+                self.advance_head(idx, &mut wait_gc, true);
             }
 
             return entry;
@@ -442,7 +443,7 @@ where
     #[cfg(feature = "scan")]
     #[inline(always)]
     #[doc(hidden)]
-    pub fn append_unfinished<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) -> usize {
+    pub fn append_unfinished<F: FnMut(bool)>(&self, ops: &[T], idx: usize, mut wait_gc: F) -> usize {
         let nops = ops.len();
         assert_eq!(nops, 1);
         let mut iteration = 1;
@@ -479,7 +480,8 @@ where
                     );
                 }
                 waitgc += 1;
-                self.exec(idx, &mut s);
+                //self.exec(idx, &mut s);
+                wait_gc(false);
                 continue;
             }
 
@@ -517,7 +519,8 @@ where
 
             // If needed, advance the head of the log forward to make room on the log.
             if advance {
-                self.advance_head(idx, &mut s);
+                self.advance_head(idx, &mut wait_gc, false);
+                //wait_gc(true);
             }
 
             return entry;
@@ -668,7 +671,7 @@ where
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
     #[inline(always)]
-    fn advance_head<F: FnMut(T, usize)>(&self, rid: usize, mut s: &mut F) {
+    pub(crate) fn advance_head<F: FnMut(bool)>(&self, rid: usize, mut wait_gc: &mut F, has_lock:bool) {
         // Keep looping until we can advance the head and create some free space
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.
@@ -702,7 +705,8 @@ where
                     warn!("Spending a long time in `advance_head`, are we starving?");
                 }
                 iteration += 1;
-                self.exec(rid, &mut s);
+                wait_gc(has_lock);
+                //self.exec(rid, &mut s);
                 continue;
             }
 
@@ -715,7 +719,8 @@ where
             if f < min_local_tail + self.size - GC_FROM_HEAD {
                 return;
             } else {
-                self.exec(rid, &mut s);
+                //self.exec(rid, &mut s);
+                wait_gc(has_lock);
             }
         }
     }

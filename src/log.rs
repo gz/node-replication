@@ -603,7 +603,7 @@ where
 
         // Make sure we're within the shared log. If we aren't, then panic.
         if l > t || l < h {
-            panic!("Local tail not within the shared log! {} {} {}", h, t, l)
+            panic!("Local tail not within the shared log! h:{} t:{} l:{}", h, t, l)
         };
 
         // Execute all operations from the passed in offset to the shared log's tail. Check if

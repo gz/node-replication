@@ -290,7 +290,8 @@ where
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
         .thread_mapping(ThreadMapping::Interleave)
         .log_strategy(mkbench::LogStrategy::One)
-        //.log_strategy(mkbench::LogStrategy::Custom(5))
+        .log_strategy(mkbench::LogStrategy::Custom(2))
+        .log_strategy(mkbench::LogStrategy::Custom(4))
         .configure(
             c,
             &bench_name,

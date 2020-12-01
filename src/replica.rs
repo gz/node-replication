@@ -521,23 +521,33 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let log_idx = self.get_log(op.clone());
+        //let log_idx = self.get_log(op.clone());
 
-        // Append the scan op in the logs
-        /* Due to how append works in log.rs, append_unfinished needs to hold
-        the combiner lock. This is very sad. */
-        self.acquire_fc_lock(idx.0, log_idx);
+        for log_idx in 0..self.slog.len() {
+            // Append the scan op in the logs
+            /* Due to how append works in log.rs, append_unfinished needs to hold
+            the combiner lock. This is very sad. */
+            self.acquire_fc_lock(idx.0, log_idx);
 
-        let entry = self.append_scan_to_logs(op.clone(), log_idx);
+            let entry = self.append_scan_to_logs(op.clone(), log_idx);
 
-        // Execute local scan, waiting for replica to be up to date
-        let resp = self.local_scan(op, idx.0, log_idx, entry);
+            // Update/wait for replica to be up to date
+            self.local_scan_update(op.clone(), idx.0, log_idx, entry);
+        }
+        
+        // TODO(irina): Scan is not a mutable operation, but right now we need this to put on the log
+        //self.data.dispatch_scan(op)
+        let resp = self.data.dispatch_mut(op);
 
-        /* Very sad. */
-        self.release_fc_lock(log_idx);
+        for log_idx in 0..self.slog.len() {
+            /* Very sad. */
+            self.release_fc_lock(log_idx);
+        }
 
-        // Fix scan log entries
-        self.slog[log_idx].fix_scan_entry(entry);
+        //for log_idx in 0..self.slog.len() {
+            // Fix scan log entries
+            //self.slog[log_idx].fix_scan_entry(entry);
+        //}
 
         // Return scan's result
         resp
@@ -635,14 +645,14 @@ where
     }
 
     #[cfg(feature = "scan")] 
-    fn local_scan(
+    fn local_scan_update(
         &self,
         //op: <D as Dispatch>::ScanOperation,
         op: <D as Dispatch>::WriteOperation,
         tid: usize,
         log_idx: usize,
         scan_entry_idx: usize,
-    ) -> <D as Dispatch>::Response {
+    ) {
         /* wait for a combiner to update, or do the update here if there is no combiner */
         /*
         while !self.slog[log_idx].is_replica_synced_for_scans(self.idx[log_idx], scan_entry_idx) {
@@ -653,10 +663,6 @@ where
 
         /* We already hold the combiner lock :( */
         self.update_to(log_idx, scan_entry_idx);
-
-        // TODO(irina): Scan is not a mutable operation, but right now we need this to put on the log
-        //self.data.dispatch_scan(op)
-        self.data.dispatch_mut(op)
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean
@@ -739,16 +745,17 @@ where
     #[inline(always)]
     fn append_scan_to_logs(&self, op: <D as Dispatch>::WriteOperation, hashidx: usize) -> usize {
         /* We still need the closure for GC; applies other operations from the log */
-        let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+        let f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
             self.data.dispatch_mut(o);
-            if i == self.idx[hashidx] {
+            //if i == self.idx[hashidx] {
                 //results.push(resp);
-                panic!("GC during Scan executed current combiner ops!");
-          }
+                //panic!("GC during Scan executed current combiner ops!");
+          //}
         };
         // TODO(irina): we block everyone right now, change this to only block threads from the same replica
-        //self.slog[hashidx].append(&[op], self.idx[hashidx], f)
-        self.slog[hashidx].append_unfinished(&[op], self.idx[hashidx], f)
+        self.slog[hashidx].append(&[op], self.idx[hashidx], f)
+        //self.slog[hashidx].append_unfinished(&[op], self.idx[hashidx], f)
+        //self.slog[hashidx].append(&[op], self.next.load(Ordering::Relaxed) + 1, f)
     }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.

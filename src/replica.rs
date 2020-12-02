@@ -96,6 +96,9 @@ where
     /// This also doubles up as the combiner lock.
     combiners: Vec<CachePadded<AtomicUsize>>,
 
+    /// Scan lock, to ensure scan insertion order into the logs
+    scanlock: CachePadded<AtomicUsize>,
+
     /// List of per-thread contexts. Threads buffer write operations in here when they
     /// cannot perform flat combining (because another thread might be doing so).
     ///
@@ -230,6 +233,7 @@ where
                 idx,
                 combiners,
                 next: CachePadded::new(AtomicUsize::new(1)),
+                scanlock: CachePadded::new(AtomicUsize::new(0)),
                 contexts: Vec::with_capacity(MAX_THREADS_PER_REPLICA),
                 pending,
                 buffer: vec![
@@ -521,23 +525,28 @@ where
         op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
     ) -> <D as Dispatch>::Response {
-        let log_idx = self.get_log(op.clone());
+        //let log_idx = self.get_log(op.clone());
+        let mut entries: Vec<usize> = Vec::with_capacity(self.slog.len());
 
         // Append the scan op in the logs
-        /* Due to how append works in log.rs, append_unfinished needs to hold
-        the combiner lock. This is very sad. */
-        //self.acquire_fc_lock(idx.0, log_idx);
+        //self.acquire_scan_lock(idx.0);
+        for logidx in 0..self.slog.len() {
+            let entry = self.append_scan_to_logs(op.clone(), idx.0, logidx);
+            entries.push(entry); 
+        }
+        //self.release_scan_lock();
 
-        let entry = self.append_scan_to_logs(op.clone(), idx.0, log_idx);
+        // Update/wait for replica to be up to date
+        self.local_scan_update(idx.0, &entries);
 
-        // Execute local scan, waiting for replica to be up to date
-        let resp = self.local_scan(op, idx.0, log_idx, entry);
-
-        /* Very sad. */
-        //self.release_fc_lock(log_idx);
+        // TODO(irina): Scan is not a mutable operation, but right now we need this to put on the log
+        //self.data.dispatch_scan(op)
+        let resp = self.data.dispatch_mut(op);
 
         // Fix scan log entries
-        self.slog[log_idx].fix_scan_entry(entry);
+        for logidx in 0..self.slog.len() {
+            self.slog[logidx].fix_scan_entry(entries[logidx]);
+        }
 
         // Return scan's result
         resp
@@ -635,28 +644,24 @@ where
     }
 
     #[cfg(feature = "scan")] 
-    fn local_scan(
+    fn local_scan_update(
         &self,
-        //op: <D as Dispatch>::ScanOperation,
-        op: <D as Dispatch>::WriteOperation,
         tid: usize,
-        log_idx: usize,
-        scan_entry_idx: usize,
-    ) -> <D as Dispatch>::Response {
+        scan_entry_idx: &Vec<usize>) {
         /* wait for a combiner to update, or do the update here if there is no combiner */
-        
-        while !self.slog[log_idx].is_replica_synced_for_scans(self.idx[log_idx], scan_entry_idx) {
-            self.try_update_to(tid, log_idx, scan_entry_idx);
-            spin_loop_hint();
+        loop {
+          let mut done = true;
+          for logidx in 0..self.slog.len() {
+            if !self.slog[logidx].is_replica_synced_for_scans(self.idx[logidx], scan_entry_idx[logidx]) {
+              done = false;
+              self.try_update_to(tid, logidx, scan_entry_idx[logidx]);
+              spin_loop_hint();
+            }
+          }
+          if done {
+            return;
+          }
         }
-        
-
-        /* We already hold the combiner lock :( */
-        //self.update_to(log_idx, scan_entry_idx);
-
-        // TODO(irina): Scan is not a mutable operation, but right now we need this to put on the log
-        //self.data.dispatch_scan(op)
-        self.data.dispatch_mut(op)
     }
 
     /// Enqueues an operation inside a thread local context. Returns a boolean
@@ -710,6 +715,44 @@ where
         self.combiners[hashidx].store(0, Ordering::Release);
     }
 
+    #[cfg(feature = "scan")] 
+    fn try_scan_lock(&self, tid: usize) -> bool {
+      // First, check if there already is a flat combiner. If there is no active flat combiner
+      // then try to acquire the combiner lock. If there is, then just return.
+      for _i in 0..4 {
+          if unsafe {
+              core::ptr::read_volatile(
+                  &self.scanlock
+                      as *const crossbeam_utils::CachePadded<core::sync::atomic::AtomicUsize>
+                      as *const usize,
+              )
+          } != 0
+          {
+              /* someone else has the lock */
+              return false;
+          };
+      }
+
+      // Try to become the combiner here. If this fails, then simply return.
+      if self.scanlock.compare_and_swap(0, tid, Ordering::Acquire) != 0 {
+          /* cas failed, we don't hold the lock */
+          return false;
+      }
+
+      /* successfully acquired the lock */
+      return true;
+  }
+
+  #[cfg(feature = "scan")] 
+  fn acquire_scan_lock(&self, tid:usize) {
+      while !self.try_scan_lock(tid) {};      
+  }
+
+  #[cfg(feature = "scan")] 
+  fn release_scan_lock(&self) {
+      self.scanlock.store(0, Ordering::Release);
+  }
+
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
     fn try_combine(&self, tid: usize, hashidx: usize) {
@@ -737,7 +780,8 @@ where
 
     #[cfg(feature = "scan")]
     #[inline(always)]
-    fn append_scan_to_logs(&self, op: <D as Dispatch>::WriteOperation, tid: usize, logidx: usize) -> usize {
+    fn append_scan_to_logs(&self, op: <D as Dispatch>::WriteOperation, 
+      tid: usize, logidx: usize) -> usize {
         /* We still need the closure for GC; applies other operations from the log */
         let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
             self.data.dispatch_mut(o);
@@ -746,13 +790,15 @@ where
                 panic!("GC during Scan executed current combiner ops!");
             }
         };
-        let wait_gc = |has_lock: bool| {
-            if has_lock || self.try_fc_lock(tid, logidx) {
+        let wait_gc = |/*entry: usize,*/ has_lock: bool| {
+            if has_lock {
+              panic!("Scan called wait_gc and already has lock!");
+            }
+            if self.try_fc_lock(tid, logidx) {
+              //self.slog[logidx].exec_to(self.idx[logidx], entry, &mut f);
               self.slog[logidx].exec(self.idx[logidx], &mut f);
-              if !has_lock {
-                self.release_fc_lock(logidx);
-              }
-            } 
+              self.release_fc_lock(logidx);
+            }
         };
         // TODO(irina): we block everyone right now, change this to only block threads from the same replica
         //self.slog[hashidx].append(&[op], self.idx[hashidx], f)

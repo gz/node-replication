@@ -529,12 +529,12 @@ where
         let mut entries: Vec<usize> = Vec::with_capacity(self.slog.len());
 
         // Append the scan op in the logs
-        //self.acquire_scan_lock(idx.0);
+        self.acquire_scan_lock(idx.0);
         for logidx in 0..self.slog.len() {
             let entry = self.append_scan_to_logs(op.clone(), idx.0, logidx);
             entries.push(entry); 
         }
-        //self.release_scan_lock();
+        self.release_scan_lock();
 
         // Update/wait for replica to be up to date
         self.local_scan_update(idx.0, &entries);

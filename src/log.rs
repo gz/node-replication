@@ -9,7 +9,7 @@ use core::fmt;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
 use core::slice::from_raw_parts_mut;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{spin_loop_hint, AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
@@ -59,6 +59,7 @@ where
 
     /// Identifies the replica that issued the above operation.
     replica: usize,
+    finished: AtomicBool,
 
     /// Indicates whether this entry represents a valid operation when on the log.
     alivef: AtomicBool,
@@ -223,6 +224,7 @@ where
                         operation: None,
                         replica: 0usize,
                         alivef: AtomicBool::new(false),
+                        finished: AtomicBool::new(false),
                     }),
                 );
             }
@@ -438,8 +440,6 @@ where
         }
     }
 
-    // TODO(irina): Get rid of this function and use replica instead of alivef to block threads
-    // from the same replica; alivef blocks threads from ALL replicas, which is more than we need.
     #[cfg(feature = "scan")]
     #[inline(always)]
     #[doc(hidden)]
@@ -506,12 +506,23 @@ where
             for i in 0..nops {
                 let eidx = tail + i;
                 let e = self.slog[self.index(eidx)].as_ptr();
+                let mut m = self.lmasks[idx - 1].get();
 
-                //unsafe { (*e).operation = Some(ops[i].clone()) };
+                // This entry was just reserved so it should be dead (!= m). However, if
+                // the log has wrapped around, then the alive mask has flipped. In this
+                // case, we flip the mask we were originally going to write into the
+                // allocated entry. We cannot flip lmasks[idx - 1] because this replica
+                // might still need to execute a few entries before the wrap around.
+                if unsafe { (*e).alivef.load(Ordering::Relaxed) == m } {
+                    m = !m;
+                }
+
+
                 /* A scan doesn't need to be repeated on each replica, so we don't include the op */
                 unsafe { (*e).operation = None };
                 unsafe { (*e).replica = idx };
-                /* We don't set alivef for scan operations until after the scan is done */
+                unsafe { (*e).finished.store(false, Ordering::Relaxed) };
+                unsafe { (*e).alivef.store(m, Ordering::Release) };
                 if i == 0 {
                     entry = eidx;
                 }
@@ -529,14 +540,13 @@ where
 
     #[cfg(feature = "scan")]
     pub fn fix_scan_entry(&self, entry: usize) {
-        // TODO(irina): check entry is valid >= 0 < LOG SIZE
-        // TODO(irina): check slog[entry].operation == SCAN
         let e = self.slog[self.index(entry)].as_ptr();
-        // TODO(irina): Right now we fix the entry by correcting alivef
-        // Need to transition this to use the replica instead, so that we only block threads on our replica
-        //unsafe { (*e).replica = MAX_REPLICAS };
-        let m = unsafe { (*e).alivef.load(Ordering::Relaxed) };
-        unsafe { (*e).alivef.store(!m, Ordering::Release) };
+        // TODO(irina): Can we use replica instead of finished to eliminate another var on
+        // the log?
+        ////unsafe { (*e).replica = MAX_REPLICAS };
+        //let m = unsafe { (*e).alivef.load(Ordering::Relaxed) };
+        //unsafe { (*e).alivef.store(!m, Ordering::Release) };
+        unsafe { (*e).finished.store(true, Ordering::Release) };
     }
 
     /// Executes a passed in closure (`d`) on all operations starting from
@@ -618,18 +628,6 @@ where
             let e = self.slog[self.index(i)].as_ptr();
 
             while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[my_replica].get() } {
-                if (iteration % 100 == 0) && (update_ltail) {
-                  // TODO(irina): In the future, we want to check if we are being kept here by 
-                  // a ScanOperation; if so, then update ltail. Right now all ops are WriteOperations, 
-                  // so we cannot easily distinguish scans. 
-
-                  // Periodically update ltail in case SCANs or READs are waiting 
-                  let lt = self.ltails[idx - 1].load(Ordering::Relaxed);
-                  if lt != i {
-                    self.ltails[idx - 1].store(i, Ordering::Relaxed);
-                  }
-                  update_ltail = false;
-                }
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
@@ -644,7 +642,22 @@ where
 
             unsafe {
                 if (*e).operation.is_some() {
-                    d((*e).operation.as_ref().unwrap().clone(), (*e).replica)
+                    d((*e).operation.as_ref().unwrap().clone(), (*e).replica);
+                } else {
+                  /* Scan operation: block threads from the same replica */
+                    if (*e).replica == idx {
+                      while !(*e).finished.load(Ordering::Acquire) {
+                        if update_ltail {
+                          /* Update ltail in case SCANs or READs are waiting */
+                          let lt = self.ltails[my_replica].load(Ordering::Relaxed);
+                          if lt != i {
+                            self.ltails[my_replica].store(i, Ordering::Relaxed);
+                          }
+                          update_ltail = false;
+                        }
+                        spin_loop_hint();
+                      }
+                    }
                 }
             };
 
@@ -653,7 +666,7 @@ where
                 self.lmasks[my_replica].set(!self.lmasks[my_replica].get());
                 //trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
             }
-        }
+          }
 
         // Update the completed tail after we've executed these operations.
         // Also update this replica's local tail.

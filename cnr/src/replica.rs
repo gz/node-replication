@@ -460,15 +460,6 @@ where
         self.get_response(idx.0, hash)
     }
 
-    fn append_scan_to_logs(
-        &self,
-        _op: <D as Dispatch>::WriteOperation,
-        _tid: usize,
-        _logidx: usize,
-    ) -> usize {
-        0
-    }
-
     pub fn execute_mut_scan(
         &self,
         op: <D as Dispatch>::WriteOperation,
@@ -476,24 +467,31 @@ where
     ) -> <D as Dispatch>::Response {
         let mut entries = self.offsets[idx.0].borrow_mut();
         entries.clear();
+        let mut offset = usize::MAX;
+        let mut f = |_, _, _, _, _| {};
 
         // Append the scan op in the logs
         for logidx in 0..self.logstate.len() {
-            let entry = self.append_scan_to_logs(op.clone(), idx.0, logidx);
+            let entry = self.logstate[logidx].slog.append_scan(
+                &op,
+                self.logstate[logidx].idx,
+                &mut f,
+                logidx,
+                offset,
+            );
+
+            // All the other entries depends on this offset in log-0.
+            if logidx == 0 {
+                offset = entry;
+            }
             entries.push(entry);
         }
 
         // Update/wait for replica to be up to date
         self.sync_for_scan(idx, &entries);
 
-        let resp = self.data.dispatch_mut(op);
-
-        // Fix scan log entries
-        for logidx in 0..self.logstate.len() {
-            self.logstate[logidx].slog.fix_scan_entry(entries[logidx]);
-        }
-
-        resp
+        // Execute the scan operation and return the response.
+        self.data.dispatch_mut(op)
     }
 
     /// Executes a read-only operation against this replica and returns a response.
@@ -613,7 +611,7 @@ where
             spin_loop();
         }
 
-        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
+        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize, _, _, _| {
             self.data.dispatch_mut(o);
         };
 
@@ -780,7 +778,7 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
-            let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+            let f = |o, i, _is_scan, _log_id, _offset| {
                 let resp = self.data.dispatch_mut(o);
                 if i == self.logstate[hashidx].idx {
                     results.push(resp);
@@ -793,7 +791,7 @@ where
 
         // Execute any operations on the shared log against this replica.
         {
-            let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+            let mut f = |o, i, _is_scan, _log_id, _offset| {
                 let resp = self.data.dispatch_mut(o);
                 if i == self.logstate[hashidx].idx {
                     results.push(resp)
@@ -1017,8 +1015,8 @@ mod test {
 
         // Add in operations to the log off the side, not through the replica.
         let o = [OpWr(121), OpWr(212)];
-        slog.append(&o, 2, |_o: OpWr, _i: usize| {});
-        slog.exec(2, &mut |_o: OpWr, _i: usize| {});
+        slog.append(&o, 2, |_o: OpWr, _i: usize, _, _, _| {});
+        slog.exec(2, &mut |_o: OpWr, _i: usize, _, _, _| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(OpRd(11), t1));

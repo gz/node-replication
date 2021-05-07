@@ -742,8 +742,8 @@ mod tests {
     #[test]
     fn test_log_append() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read];
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        let o = [(Operation::Read, 1)];
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 1);
@@ -756,8 +756,8 @@ mod tests {
     #[test]
     fn test_log_append_multiple() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read, Operation::Write(119)];
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        let o = [(Operation::Read, 1), (Operation::Write(119), 1)];
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
         assert_eq!(l.tail.load(Ordering::Relaxed), 2);
@@ -774,7 +774,7 @@ mod tests {
         l.ltails[2].store(4096, Ordering::Relaxed);
         l.ltails[3].store(799, Ordering::Relaxed);
 
-        l.advance_head(0, &mut |_o: Operation, _i: usize| {});
+        l.advance_head(0, &mut |_o: Operation, _i: usize, _tid: usize| {});
         assert_eq!(l.head.load(Ordering::Relaxed), 224);
     }
 
@@ -782,10 +782,10 @@ mod tests {
     #[test]
     fn test_log_append_gc() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 4] = unsafe {
-            let mut a: [Operation; 4] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize); 4] = unsafe {
+            let mut a: [(Operation, usize); 4] = ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
+                ::std::ptr::write(i, (Operation::Read, 1));
             }
             a
         };
@@ -793,7 +793,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.tail.store(l.size - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[0].store(1024, Ordering::Relaxed);
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {});
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size - GC_FROM_HEAD + 3);
@@ -804,10 +804,10 @@ mod tests {
     #[test]
     fn test_log_append_wrap() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 1024] = unsafe {
-            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize); 1024] = unsafe {
+            let mut a: [(Operation, usize); 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
+                ::std::ptr::write(i, (Operation::Read, 1));
             }
             a
         };
@@ -815,7 +815,7 @@ mod tests {
         l.next.store(2, Ordering::Relaxed);
         l.head.store(2 * 8192, Ordering::Relaxed);
         l.tail.store(l.size - 10, Ordering::Relaxed);
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {});
 
         assert_eq!(l.lmasks[0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
@@ -825,13 +825,13 @@ mod tests {
     #[test]
     fn test_log_exec() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read];
-        let mut f = |op: Operation, i: usize| {
+        let o = [(Operation::Read, 1)];
+        let mut f = |op: Operation, i: usize, _tid: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {});
         l.exec(1, &mut f);
 
         assert_eq!(
@@ -848,7 +848,7 @@ mod tests {
     #[test]
     fn test_log_exec_empty() {
         let l = Log::<Operation>::default();
-        let mut f = |_o: Operation, _i: usize| {
+        let mut f = |_o: Operation, _i: usize, _tid: usize| {
             assert!(false);
         };
 
@@ -859,16 +859,16 @@ mod tests {
     #[test]
     fn test_log_exec_zero() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read];
-        let mut f = |op: Operation, i: usize| {
+        let o = [(Operation::Read, 1)];
+        let mut f = |op: Operation, i: usize, _tid: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
         };
-        let mut g = |_op: Operation, _i: usize| {
+        let mut g = |_op: Operation, _i: usize, _tid: usize| {
             assert!(false);
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {});
         l.exec(1, &mut f);
         l.exec(1, &mut g);
     }
@@ -877,15 +877,15 @@ mod tests {
     #[test]
     fn test_log_exec_multiple() {
         let l = Log::<Operation>::default();
-        let o = [Operation::Read, Operation::Write(119)];
+        let o = [(Operation::Read, 1), (Operation::Write(119), 1)];
         let mut s = 0;
-        let mut f = |op: Operation, _i: usize| match op {
+        let mut f = |op: Operation, _i: usize, _tid: usize| match op {
             Operation::Read => s += 121,
             Operation::Write(v) => s += v,
             Operation::Invalid => assert!(false),
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {});
         l.exec(1, &mut f);
         assert_eq!(s, 240);
 
@@ -904,23 +904,23 @@ mod tests {
     #[test]
     fn test_log_exec_wrap() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 1024] = unsafe {
-            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize); 1024] = unsafe {
+            let mut a: [(Operation, usize); 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
+                ::std::ptr::write(i, (Operation::Read, 1));
             }
             a
         };
-        let mut f = |op: Operation, i: usize| {
+        let mut f = |op: Operation, i: usize, _tid: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {}); // Required for GC to work correctly.
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {}); // Required for GC to work correctly.
         l.next.store(2, Ordering::SeqCst);
         l.head.store(2 * 8192, Ordering::SeqCst);
         l.tail.store(l.size - 10, Ordering::SeqCst);
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {});
 
         l.ltails[0].store(l.size - 10, Ordering::SeqCst);
         l.exec(1, &mut f);
@@ -934,18 +934,18 @@ mod tests {
     #[should_panic]
     fn test_exec_panic() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 1024] = unsafe {
-            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
+        let o: [(Operation, usize); 1024] = unsafe {
+            let mut a: [(Operation, usize); 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
             for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
+                ::std::ptr::write(i, (Operation::Read, 1));
             }
             a
         };
-        let mut f = |_op: Operation, _i: usize| {
+        let mut f = |_op: Operation, _i: usize, _tid: usize| {
             assert!(false);
         };
 
-        l.append(&o, 1, |_o: Operation, _i: usize| {});
+        l.append(&o, 1, |_o: Operation, _i: usize, _tid: usize| {});
         l.head.store(8192, Ordering::SeqCst);
 
         l.exec(1, &mut f);
@@ -956,27 +956,27 @@ mod tests {
     #[test]
     fn test_log_change_refcount() {
         let l = Log::<Arc<Operation>>::default();
-        let o1 = [Arc::new(Operation::Read)];
-        let o2 = [Arc::new(Operation::Read)];
-        assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), 1);
+        let o1 = [(Arc::new(Operation::Read), 1)];
+        let o2 = [(Arc::new(Operation::Read), 1)];
+        assert_eq!(Arc::strong_count(&o1[0].0), 1);
+        assert_eq!(Arc::strong_count(&o2[0].0), 1);
 
-        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
-        assert_eq!(Arc::strong_count(&o1[0]), 2);
-        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
-        assert_eq!(Arc::strong_count(&o1[0]), 3);
+        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize, _tid: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0].0), 2);
+        l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize, _tid: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0].0), 3);
 
         unsafe { l.reset() };
 
         // Over here, we overwrite entries that were written to by the two
         // previous appends. This decreases the refcount of o1 and increases
         // the refcount of o2.
-        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
-        assert_eq!(Arc::strong_count(&o1[0]), 2);
-        assert_eq!(Arc::strong_count(&o2[0]), 2);
-        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
-        assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), 3);
+        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize, _tid: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0].0), 2);
+        assert_eq!(Arc::strong_count(&o2[0].0), 2);
+        l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize, _tid: usize| {});
+        assert_eq!(Arc::strong_count(&o1[0].0), 1);
+        assert_eq!(Arc::strong_count(&o2[0].0), 3);
     }
 
     // Tests that operations are cloned when added to the log, and that
@@ -989,24 +989,24 @@ mod tests {
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let size: usize = total_entries * entry_size;
         let l = Log::<Arc<Operation>>::new(size, 1);
-        let o1 = [Arc::new(Operation::Read)];
-        let o2 = [Arc::new(Operation::Read)];
-        assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), 1);
+        let o1 = [(Arc::new(Operation::Read), 1)];
+        let o2 = [(Arc::new(Operation::Read), 1)];
+        assert_eq!(Arc::strong_count(&o1[0].0), 1);
+        assert_eq!(Arc::strong_count(&o2[0].0), 1);
 
         for i in 1..(total_entries + 1) {
-            l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize| {});
-            assert_eq!(Arc::strong_count(&o1[0]), i + 1);
+            l.append(&o1[..], 1, |_o: Arc<Operation>, _i: usize, _tid: usize| {});
+            assert_eq!(Arc::strong_count(&o1[0].0), i + 1);
         }
-        assert_eq!(Arc::strong_count(&o1[0]), total_entries + 1);
+        assert_eq!(Arc::strong_count(&o1[0].0), total_entries + 1);
 
         for i in 1..(total_entries + 1) {
-            l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize| {});
-            assert_eq!(Arc::strong_count(&o1[0]), (total_entries + 1) - i);
-            assert_eq!(Arc::strong_count(&o2[0]), i + 1);
+            l.append(&o2[..], 1, |_o: Arc<Operation>, _i: usize, _tid: usize| {});
+            assert_eq!(Arc::strong_count(&o1[0].0), (total_entries + 1) - i);
+            assert_eq!(Arc::strong_count(&o2[0].0), i + 1);
         }
-        assert_eq!(Arc::strong_count(&o1[0]), 1);
-        assert_eq!(Arc::strong_count(&o2[0]), total_entries + 1);
+        assert_eq!(Arc::strong_count(&o1[0].0), 1);
+        assert_eq!(Arc::strong_count(&o2[0].0), total_entries + 1);
     }
 
     // Tests that is_replica_synced_for_read() works correctly; it returns
@@ -1020,13 +1020,13 @@ mod tests {
         assert_eq!(one, 1);
         assert_eq!(two, 2);
 
-        let o = [Operation::Read];
-        let mut f = |op: Operation, i: usize| {
+        let o = [(Operation::Read, 1)];
+        let mut f = |op: Operation, i: usize, _tid: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
         };
 
-        l.append(&o, one, |_o: Operation, _i: usize| {});
+        l.append(&o, one, |_o: Operation, _i: usize, _tid: usize| {});
         l.exec(one, &mut f);
         assert_eq!(l.is_replica_synced_for_reads(one, l.get_ctail()), true);
         assert_eq!(l.is_replica_synced_for_reads(two, l.get_ctail()), false);

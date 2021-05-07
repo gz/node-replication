@@ -777,14 +777,6 @@ mod test {
             repl.logstate[0].buffer.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
-        assert_eq!(
-            repl.logstate[0].inflight.borrow().len(),
-            MAX_THREADS_PER_REPLICA
-        );
-        assert_eq!(
-            repl.logstate[0].result.borrow().capacity(),
-            MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
-        );
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 0);
     }
 
@@ -816,11 +808,13 @@ mod test {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new(1024, 1));
         let repl = Replica::<Data>::new(vec![slog]);
         let mut o = vec![];
+        let tid = 8;
 
-        assert!(repl.make_pending(OpWr(121), 8, 0));
-        assert_eq!(repl.contexts[7].ops(&mut o, 0), 1);
+        assert!(repl.make_pending(OpWr(121), tid, 0));
+        assert_eq!(repl.contexts[tid - 1].ops(&mut o, 0), 1);
         assert_eq!(o.len(), 1);
-        assert_eq!(o[0], OpWr(121));
+        assert_eq!(o[0].0, OpWr(121));
+        assert_eq!(o[0].1, tid);
     }
 
     // Tests that we can append and execute operations using try_combine().
@@ -912,9 +906,9 @@ mod test {
         let repl = Replica::<Data>::new(vec![slog.clone()]);
 
         // Add in operations to the log off the side, not through the replica.
-        let o = [OpWr(121), OpWr(212)];
-        slog.append(&o, 2, |_o: OpWr, _i: usize| {});
-        slog.exec(2, &mut |_o: OpWr, _i: usize| {});
+        let o = [(OpWr(121), 1), (OpWr(212), 1)];
+        slog.append(&o, 2, &|_o: OpWr, _i: usize, _tid: usize| {});
+        slog.exec(2, &mut &|_o: OpWr, _i: usize, _tid: usize| {});
 
         let t1 = repl.register().expect("Failed to register with replica.");
         assert_eq!(Ok(2), repl.execute(OpRd(11), t1));

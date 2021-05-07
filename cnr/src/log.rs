@@ -60,6 +60,9 @@ where
     /// Identifies the replica that issued the above operation.
     replica: usize,
 
+    /// Identifies the replica-local thread-id that issued the operation.
+    thread: usize,
+
     /// Indicates whether this entry represents a valid operation when on the log.
     alivef: AtomicBool,
 }
@@ -227,6 +230,7 @@ where
                     Cell::new(Entry {
                         operation: None,
                         replica: 0usize,
+                        thread: 0usize,
                         alivef: AtomicBool::new(false),
                     }),
                 );
@@ -320,7 +324,7 @@ where
     /// as public due to being used by the benchmarking code.
     #[inline(always)]
     #[doc(hidden)]
-    pub fn append<F: FnMut(T, usize)>(&self, ops: &[T], idx: usize, mut s: F) {
+    pub fn append<F: FnMut(T, usize, usize)>(&self, ops: &[(T, usize)], idx: usize, mut s: F) {
         let nops = ops.len();
         let mut iteration = 1;
         let mut waitgc = 1;
@@ -392,8 +396,9 @@ where
                     m = !m;
                 }
 
-                unsafe { (*e).operation = Some(ops[i].clone()) };
+                unsafe { (*e).operation = Some(ops[i].0.clone()) };
                 unsafe { (*e).replica = idx };
+                unsafe { (*e).thread = ops[i].1.clone() }
                 unsafe { (*e).alivef.store(m, Ordering::Release) };
             }
 
@@ -413,7 +418,7 @@ where
     /// The passed in closure is expected to take in two arguments: The operation
     /// from the shared log to be executed and the replica that issued it.
     #[inline(always)]
-    pub(crate) fn exec<F: FnMut(T, usize)>(&self, idx: usize, d: &mut F) {
+    pub(crate) fn exec<F: FnMut(T, usize, usize)>(&self, idx: usize, d: &mut F) {
         // Load the logical log offset from which we must execute operations.
         let l = self.ltails[idx - 1].load(Ordering::Relaxed);
 
@@ -451,7 +456,13 @@ where
                 iteration += 1;
             }
 
-            unsafe { d((*e).operation.as_ref().unwrap().clone(), (*e).replica) };
+            unsafe {
+                d(
+                    (*e).operation.as_ref().unwrap().clone(),
+                    (*e).replica,
+                    (*e).thread,
+                )
+            };
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.size - 1 {
@@ -476,7 +487,7 @@ where
     /// then this method will never return. Accepts a closure that is passed into exec()
     /// to ensure that this replica does not deadlock GC.
     #[inline(always)]
-    fn advance_head<F: FnMut(T, usize)>(&self, rid: usize, mut s: &mut F) {
+    fn advance_head<F: FnMut(T, usize, usize)>(&self, rid: usize, mut s: &mut F) {
         // Keep looping until we can advance the head and create some free space
         // on the log. If one of the replicas has stopped making progress, then
         // this method might never return.

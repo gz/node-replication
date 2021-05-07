@@ -84,16 +84,7 @@ where
     /// A buffer of operations for flat combining. The combiner stages operations in
     /// here and then batch appends them into the shared log. This helps amortize
     /// the cost of the compare_and_swap() on the tail of the log.
-    buffer: CachePadded<RefCell<Vec<<D as Dispatch>::WriteOperation>>>,
-
-    /// Number of operations collected by the combiner from each thread at any
-    /// given point of time. Index `i` holds the number of operations collected from
-    /// thread with identifier `i + 1`.
-    inflight: CachePadded<RefCell<[usize; MAX_THREADS_PER_REPLICA]>>,
-
-    /// A buffer of results collected after flat combining. With the help of `inflight`,
-    /// the combiner enqueues these results into the appropriate thread context.
-    result: CachePadded<RefCell<Vec<<D as Dispatch>::Response>>>,
+    buffer: CachePadded<RefCell<Vec<(<D as Dispatch>::WriteOperation, usize)>>>,
 }
 
 impl<'a, D> LogState<'a, D>
@@ -108,19 +99,6 @@ where
             combiner: CachePadded::new(AtomicUsize::new(0)),
             pending: arr![CachePadded::new(AtomicBool::new(false)); 256],
             buffer:
-                CachePadded::new(
-                    RefCell::new(
-                        Vec::with_capacity(
-                            MAX_THREADS_PER_REPLICA
-                                * Context::<
-                                    <D as Dispatch>::WriteOperation,
-                                    <D as Dispatch>::Response,
-                                >::batch_size(),
-                        ),
-                    ),
-                ),
-            inflight: CachePadded::new(RefCell::new(arr![Default::default(); 256])),
-            result:
                 CachePadded::new(
                     RefCell::new(
                         Vec::with_capacity(
@@ -572,7 +550,7 @@ where
             spin_loop();
         }
 
-        let mut f = |o: <D as Dispatch>::WriteOperation, _i: usize| {
+        let mut f = |o: <D as Dispatch>::WriteOperation, _rid: usize, _tid: usize| {
             self.data.dispatch_mut(o);
         };
 
@@ -690,12 +668,9 @@ where
     fn combine(&self, hashidx: usize) {
         //  TODO: may need to be in a per-log state context
         let mut buffer = self.logstate[hashidx].buffer.borrow_mut();
-        let mut operations = self.logstate[hashidx].inflight.borrow_mut();
-        let mut results = self.logstate[hashidx].result.borrow_mut();
         let pending = &self.logstate[hashidx].pending;
 
         buffer.clear();
-        results.clear();
 
         let next = self.next.load(Ordering::Relaxed);
 
@@ -709,17 +684,17 @@ where
             ) == Ok(true)
             {
                 // pass hash of current op to contexts, only get ops from context that have the same hash/log id
-                operations[tid - 1] = self.contexts[tid - 1].ops(&mut buffer, hashidx);
+                self.contexts[tid - 1].ops(&mut buffer, hashidx);
             }
         }
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         {
-            let f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+            let f = |o: <D as Dispatch>::WriteOperation, rid: usize, tid: usize| {
                 let resp = self.data.dispatch_mut(o);
-                if i == self.logstate[hashidx].idx {
-                    results.push(resp);
+                if rid == self.logstate[hashidx].idx {
+                    self.contexts[tid - 1].enqueue_resp(resp);
                 }
             };
             self.logstate[hashidx]
@@ -729,30 +704,15 @@ where
 
         // Execute any operations on the shared log against this replica.
         {
-            let mut f = |o: <D as Dispatch>::WriteOperation, i: usize| {
+            let mut f = |o: <D as Dispatch>::WriteOperation, rid: usize, tid: usize| {
                 let resp = self.data.dispatch_mut(o);
-                if i == self.logstate[hashidx].idx {
-                    results.push(resp)
+                if rid == self.logstate[hashidx].idx {
+                    self.contexts[tid - 1].enqueue_resp(resp);
                 };
             };
             self.logstate[hashidx]
                 .slog
                 .exec(self.logstate[hashidx].idx, &mut f);
-        }
-
-        // Return/Enqueue responses back into the appropriate thread context(s).
-        let (mut s, mut f) = (0, 0);
-        // TODO: hashing makes this non-linear, need to take into account which operations
-        // belong to our current combiner round...
-        for i in 1..next {
-            if operations[i - 1] == 0 {
-                continue;
-            };
-
-            f += operations[i - 1];
-            self.contexts[i - 1].enqueue_resps(&results[s..f]);
-            s += operations[i - 1];
-            operations[i - 1] = 0;
         }
     }
 }

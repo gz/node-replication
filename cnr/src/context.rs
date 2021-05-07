@@ -121,6 +121,7 @@ where
     /// Enqueues a batch of responses onto this context. This is invoked by the combiner
     /// after it has executed operations (obtained through a call to ops()) against the
     /// replica this thread is registered against.
+    #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn enqueue_resps(&self, responses: &[R]) {
         let h = self.comb.load(Ordering::Relaxed);
@@ -143,10 +144,25 @@ where
         self.comb.store(h + n, Ordering::Relaxed);
     }
 
+    /// Enqueues a batch of responses onto this context. This is invoked by the combiner
+    /// after it has executed operations (obtained through a call to ops()) against the
+    /// replica this thread is registered against.
+    #[inline(always)]
+    pub(crate) fn enqueue_resp(&self, responses: R) {
+        let h = self.comb.load(Ordering::Relaxed);
+
+        let e = self.batch[self.index(h)].as_ptr();
+        unsafe {
+            (*e).2 = Some(responses.clone());
+        }
+
+        self.comb.store(h + 1, Ordering::Relaxed);
+    }
+
     /// Adds any pending operations on this context to a passed in buffer. Returns the
     /// the number of such operations that were added in.
     #[inline(always)]
-    pub(crate) fn ops(&self, buffer: &mut Vec<T>, hash: usize) -> usize {
+    pub(crate) fn ops(&self, buffer: &mut Vec<(T, usize)>, hash: usize) -> usize {
         let mut h = self.comb.load(Ordering::Relaxed);
         let t = self.tail.load(Ordering::Relaxed);
 
@@ -168,7 +184,7 @@ where
             // on the operation is safe.
             let e = self.batch[self.index(i)].as_ptr();
             if unsafe { (*e).1 } == Some(hash) {
-                buffer.push(unsafe { (*e).0.as_ref().unwrap().clone() });
+                buffer.push((unsafe { (*e).0.as_ref().unwrap().clone() }, self.idx));
                 n += 1;
                 h += 1;
             }

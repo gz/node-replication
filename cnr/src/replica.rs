@@ -272,11 +272,11 @@ where
 
             let mut replica = uninit_replica.assume_init();
             // Add `MAX_THREADS_PER_REPLICA` contexts
-            for _idx in 0..MAX_THREADS_PER_REPLICA {
+            for idx in 0..MAX_THREADS_PER_REPLICA {
                 Arc::get_mut(&mut replica)
                     .unwrap()
                     .contexts
-                    .push(Default::default())
+                    .push(CachePadded::new(Context::new(idx + 1)))
             }
 
             // Add per-log state

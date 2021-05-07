@@ -53,6 +53,9 @@ where
     /// This variable is updated by the combiner, and is read by the thread that owns this context.
     /// We can avoid making it an atomic by assuming we're on x86.
     pub comb: CachePadded<AtomicUsize>,
+
+    /// Identified the context numbers with-in a replica.
+    idx: usize,
 }
 
 impl<T, R> Default for Context<T, R>
@@ -73,6 +76,7 @@ where
             tail: CachePadded::new(AtomicUsize::new(0)),
             head: CachePadded::new(AtomicUsize::new(0)),
             comb: CachePadded::new(AtomicUsize::new(0)),
+            idx: 0,
         }
     }
 }
@@ -82,6 +86,13 @@ where
     T: Sized + Clone,
     R: Sized + Clone,
 {
+    pub fn new(id: usize) -> Context<T, R> {
+        let mut context: Context<T, R> = Default::default();
+        context.idx = id;
+
+        context
+    }
+
     /// Enqueues an operation onto this context's batch of pending operations.
     ///
     /// Returns true if the operation was successfully enqueued. False otherwise.

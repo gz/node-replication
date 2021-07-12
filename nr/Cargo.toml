@@ -31,3 +31,8 @@ rand = {version = "0.8", features = ["small_rng"]}
 
 [features]
 unstable = []
+use_clflushopt = []
+use_clwb = []
+use_msync = []
+no_persist = []
+per_element_flush = []

@@ -67,7 +67,13 @@
 //#![no_std]
 #![cfg_attr(
     feature = "unstable",
-    feature(new_uninit, get_mut_unchecked, negative_impls)
+    feature(
+        new_uninit,
+        get_mut_unchecked,
+        negative_impls,
+        llvm_asm,
+        thread_id_value
+    )
 )]
 
 #[cfg(test)]
@@ -85,6 +91,7 @@ extern crate log as logging;
 extern crate static_assertions;
 
 mod context;
+mod ll;
 mod log;
 mod replica;
 pub mod rwlock;

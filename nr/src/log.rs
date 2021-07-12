@@ -20,6 +20,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
 use crate::context::MAX_PENDING_OPS;
+use crate::ll::clflush;
 use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// The default size of the shared log in bytes. If constructed using the
@@ -436,6 +437,18 @@ where
                 unsafe { (*e).operation = Some(op.clone()) };
                 unsafe { (*e).replica = idx };
                 unsafe { (*e).alivef.store(m, Ordering::Release) };
+                #[cfg(feature = "per_element_flush")]
+                {
+                    clflush(&e, Log::<T>::entry_size(), true);
+                }
+            }
+            #[cfg(not(feature = "per_element_flush"))]
+            {
+                clflush(
+                    &self.slog[tail].as_ptr(),
+                    Log::<T>::entry_size() * nops,
+                    true,
+                );
             }
 
             // If needed, advance the head of the log forward to make room on the log.

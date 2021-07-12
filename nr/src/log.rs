@@ -1,17 +1,23 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
+use libc;
 
-use alloc::alloc::{alloc, dealloc, Layout};
+use alloc::alloc::Layout;
 
 use core::cell::Cell;
 use core::default::Default;
 use core::fmt;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
+use core::ptr;
 use core::slice::from_raw_parts_mut;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
+
+use std::fs::OpenOptions;
+use std::os::unix::io::AsRawFd;
+use std::path::PathBuf;
 
 use crate::context::MAX_PENDING_OPS;
 use crate::replica::MAX_THREADS_PER_REPLICA;
@@ -91,10 +97,10 @@ where
     T: Sized + Clone,
 {
     /// Raw pointer to the actual underlying log. Required for dealloc.
-    rawp: *mut u8,
+    rawp: *mut libc::c_void,
 
     /// Size of the underlying log in bytes. Required for dealloc.
-    rawb: usize,
+    _rawb: usize,
 
     /// The maximum number of entries that can be held inside the log.
     size: usize,
@@ -195,14 +201,31 @@ where
 
         // Now that we have the actual number of entries, allocate the log.
         let b = num * Log::<T>::entry_size();
+        let layout = Layout::from_size_align(b, align_of::<Cell<Entry<T>>>())
+            .expect("Alignment error while allocating the shared log!");
+
+        let filename = format!("/mnt/node0/test");
+        let path = PathBuf::from(filename);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)
+            .unwrap();
+        file.set_len(layout.size() as u64).unwrap();
+
         let mem = unsafe {
-            alloc(
-                Layout::from_size_align(b, align_of::<Cell<Entry<T>>>())
-                    .expect("Alignment error while allocating the shared log!"),
+            libc::mmap(
+                ptr::null_mut(),
+                layout.size(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
             )
         };
-        if mem.is_null() {
-            panic!("Failed to allocate memory for the shared log!");
+        if mem == libc::MAP_FAILED {
+            panic!("Could not access data from memory mapped file")
         }
         let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Entry<T>>, num) };
 
@@ -227,7 +250,7 @@ where
 
         Log {
             rawp: mem,
-            rawb: b,
+            _rawb: b,
             size: num,
             slog: raw,
             head: CachePadded::new(AtomicUsize::new(0usize)),
@@ -693,13 +716,7 @@ where
 {
     /// Destructor for the shared log.
     fn drop(&mut self) {
-        unsafe {
-            dealloc(
-                self.rawp,
-                Layout::from_size_align(self.rawb, align_of::<Cell<Entry<T>>>())
-                    .expect("Alignment error while deallocating the shared log!"),
-            )
-        };
+        unsafe { libc::munmap(self.rawp, self.size) };
     }
 }
 
@@ -747,7 +764,7 @@ mod tests {
     fn test_log_create() {
         let l = Log::<Operation>::new(1024 * 1024);
         let n = (1024 * 1024) / Log::<Operation>::entry_size();
-        assert_eq!(l.rawb, 1024 * 1024);
+        assert_eq!(l._rawb, 1024 * 1024);
         assert_eq!(l.size, n);
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
@@ -768,7 +785,7 @@ mod tests {
     #[test]
     fn test_log_min_size() {
         let l = Log::<Operation>::new(1024);
-        assert_eq!(l.rawb, 2 * GC_FROM_HEAD * Log::<Operation>::entry_size());
+        assert_eq!(l._rawb, 2 * GC_FROM_HEAD * Log::<Operation>::entry_size());
         assert_eq!(l.size, 2 * GC_FROM_HEAD);
         assert_eq!(l.slog.len(), 2 * GC_FROM_HEAD);
     }
@@ -779,7 +796,7 @@ mod tests {
     fn test_log_power_of_two() {
         let l = Log::<Operation>::new(524 * 1024);
         let n = ((524 * 1024) / Log::<Operation>::entry_size()).checked_next_power_of_two();
-        assert_eq!(l.rawb, n.unwrap() * Log::<Operation>::entry_size());
+        assert_eq!(l._rawb, n.unwrap() * Log::<Operation>::entry_size());
         assert_eq!(l.size, n.unwrap());
         assert_eq!(l.slog.len(), n.unwrap());
     }
@@ -789,7 +806,7 @@ mod tests {
     fn test_log_create_default() {
         let l = Log::<Operation>::default();
         let n = DEFAULT_LOG_BYTES / Log::<Operation>::entry_size();
-        assert_eq!(l.rawb, DEFAULT_LOG_BYTES);
+        assert_eq!(l._rawb, DEFAULT_LOG_BYTES);
         assert_eq!(l.size, n);
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);

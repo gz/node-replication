@@ -64,7 +64,7 @@
 //!    }
 //! }
 //! ```
-#![no_std]
+//#![no_std]
 #![cfg_attr(
     feature = "unstable",
     feature(new_uninit, get_mut_unchecked, negative_impls)

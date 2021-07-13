@@ -742,7 +742,7 @@ mod tests {
     use std::sync::Arc;
 
     // Define operations along with their arguments that go onto the log.
-    #[derive(Clone)] // Traits required by the log interface.
+    #[derive(Copy, Clone)] // Traits required by the log interface.
     #[derive(Debug, PartialEq)] // Traits required for testing.
     enum Operation {
         Read,
@@ -923,15 +923,10 @@ mod tests {
 
     // Tests that on log wrap around, the local mask stays
     // the same because entries have not been executed yet.
+    #[test]
     fn test_log_append_wrap() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 1024] = unsafe {
-            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
-            for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
-            }
-            a
-        };
+        let o = [Operation::Read; 96];
 
         l.next.store(2, Ordering::Relaxed);
         l.head.store(2 * 8192, Ordering::Relaxed);
@@ -939,7 +934,7 @@ mod tests {
         l.append(&o, 1, |_o: Operation, _i: usize| {});
 
         assert_eq!(l.lmasks[0].get(), true);
-        assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
+        assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 86);
     }
 
     // Test that we can execute operations appended to the log.
@@ -1022,15 +1017,10 @@ mod tests {
 
     // Test that the replica local mask is updated correctly when executing over
     // a wrapped around log.
+    #[test]
     fn test_log_exec_wrap() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 1024] = unsafe {
-            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
-            for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
-            }
-            a
-        };
+        let o = [Operation::Read; 96];
         let mut f = |op: Operation, i: usize| {
             assert_eq!(op, Operation::Read);
             assert_eq!(i, 1);
@@ -1046,21 +1036,16 @@ mod tests {
         l.exec(1, &mut f);
 
         assert_eq!(l.lmasks[0].get(), false);
-        assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 1014);
+        assert_eq!(l.tail.load(Ordering::Relaxed), l.size + 86);
     }
 
     // Tests that exec() panics if the head of the log advances beyond the tail.
-    //#[test]
-    //#[should_panic]
+    #[test]
+    #[should_panic]
     fn test_exec_panic() {
         let l = Log::<Operation>::default();
-        let o: [Operation; 1024] = unsafe {
-            let mut a: [Operation; 1024] = ::std::mem::MaybeUninit::zeroed().assume_init();
-            for i in &mut a[..] {
-                ::std::ptr::write(i, Operation::Read);
-            }
-            a
-        };
+        let o = [Operation::Read; 96];
+
         let mut f = |_op: Operation, _i: usize| {
             assert!(false);
         };

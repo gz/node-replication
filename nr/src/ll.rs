@@ -87,7 +87,7 @@ pub fn clflush<T: ?Sized>(ptr: &T, len: usize, fence: bool) {
             start += 64;
         }
 
-        if fence == true {
+        if fence {
             sfence();
         }
     }

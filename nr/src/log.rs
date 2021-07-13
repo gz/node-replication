@@ -1,7 +1,5 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-use libc;
-
 use alloc::alloc::Layout;
 
 use core::cell::Cell;
@@ -205,7 +203,7 @@ where
         let layout = Layout::from_size_align(b, align_of::<Cell<Entry<T>>>())
             .expect("Alignment error while allocating the shared log!");
 
-        let filename = format!("/mnt/node0/test");
+        let filename = format!("/mnt/node{}/test", 0);
         let path = PathBuf::from(filename);
         let file = OpenOptions::new()
             .read(true)

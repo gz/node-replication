@@ -204,7 +204,17 @@ where
             .expect("Alignment error while allocating the shared log!");
 
         let filename = format!("/mnt/node{}/test", 0);
-        let path = PathBuf::from(filename);
+        let path = if PathBuf::from("/mnt/node0").exists() {
+            PathBuf::from(filename)
+        } else {
+            #[cfg(test)]
+            {
+                PathBuf::from("test")
+            }
+            #[cfg(not(test))]
+            unreachable!()
+        };
+
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -728,6 +738,10 @@ where
     /// Destructor for the shared log.
     fn drop(&mut self) {
         unsafe { libc::munmap(self.rawp, self.size) };
+        #[cfg(test)]
+        {
+            let _ignore = std::fs::remove_file("test");
+        }
     }
 }
 

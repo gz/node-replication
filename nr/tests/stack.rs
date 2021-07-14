@@ -99,6 +99,7 @@ impl Dispatch for Stack {
 ///
 /// Execute operations at random, comparing the result
 /// against a known correct implementation.
+#[cfg(feature = "integration_test")]
 #[test]
 fn sequential_test() {
     let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new(
@@ -279,6 +280,7 @@ impl Dispatch for VerifyStack {
 
 /// Many threads run in parallel, each pushing a unique increasing element into the stack.
 // Then, a single thread pops all elements and checks that they are popped in the right order.
+#[cfg(feature = "integration_test")]
 #[test]
 fn parallel_push_sequential_pop_test() {
     let t = 4usize;
@@ -345,6 +347,7 @@ fn parallel_push_sequential_pop_test() {
 /// Many threads run in parallel, each pushing a unique increasing element into the stack.
 /// Then, many threads run in parallel, each popping an element and checking that the
 /// elements that came from a given thread are monotonically decreasing.
+#[cfg(feature = "integration_test")]
 #[test]
 fn parallel_push_and_pop_test() {
     let t = 4usize;
@@ -431,6 +434,7 @@ fn bench(r: Arc<Replica<Stack>>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64
 
 /// Verify that 2 replicas are equal after a set of random
 /// operations have been executed against the log.
+#[cfg(feature = "integration_test")]
 #[test]
 fn replicas_are_equal() {
     let t = 4usize;

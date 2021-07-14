@@ -30,8 +30,9 @@ chashmap = "2.2"
 rand = {version = "0.8", features = ["small_rng"]}
 
 [features]
-default = ["unstable"]
+default = ["unstable", "integration_test"]
 unstable = []
+integration_test = []
 use_clflushopt = []
 use_clwb = []
 use_msync = []

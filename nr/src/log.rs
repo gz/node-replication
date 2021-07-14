@@ -207,11 +207,11 @@ where
         let path = if PathBuf::from("/mnt/node0").exists() {
             PathBuf::from(filename)
         } else {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "integration_test"))]
             {
                 PathBuf::from("test")
             }
-            #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "integration_test")))]
             unreachable!()
         };
 
@@ -738,7 +738,7 @@ where
     /// Destructor for the shared log.
     fn drop(&mut self) {
         unsafe { libc::munmap(self.rawp, self.size) };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "integration_test"))]
         {
             let _ignore = std::fs::remove_file("test");
         }

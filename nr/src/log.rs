@@ -4,6 +4,7 @@ use alloc::alloc::Layout;
 
 use core::cell::Cell;
 use core::default::Default;
+use core::ffi::c_void;
 use core::fmt;
 use core::mem::{align_of, size_of};
 use core::ops::{Drop, FnMut};
@@ -20,6 +21,41 @@ use std::path::PathBuf;
 use crate::context::MAX_PENDING_OPS;
 use crate::ll::clflush;
 use crate::replica::MAX_THREADS_PER_REPLICA;
+
+pub unsafe fn mmap_region(name: &str, socket: u64, layout: Layout) -> *mut c_void {
+    let filename = format!("/mnt/node{}/{}", socket, name);
+    let path = if PathBuf::from("/mnt/node0").exists() {
+        PathBuf::from(filename)
+    } else {
+        #[cfg(any(test, feature = "integration_test"))]
+        {
+            PathBuf::from(format!("{}", name))
+        }
+        #[cfg(not(any(test, feature = "integration_test")))]
+        unreachable!()
+    };
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&path)
+        .unwrap();
+    file.set_len(layout.size() as u64).unwrap();
+
+    let mem = libc::mmap(
+        ptr::null_mut(),
+        layout.size(),
+        libc::PROT_READ | libc::PROT_WRITE,
+        libc::MAP_SHARED,
+        file.as_raw_fd(),
+        0,
+    );
+    if mem == libc::MAP_FAILED {
+        panic!("Could not access data from memory mapped file")
+    }
+    mem
+}
 
 /// The default size of the shared log in bytes. If constructed using the
 /// default constructor, the log will be these many bytes in size. Currently
@@ -203,39 +239,7 @@ where
         let layout = Layout::from_size_align(b, align_of::<Cell<Entry<T>>>())
             .expect("Alignment error while allocating the shared log!");
 
-        let filename = format!("/mnt/node{}/test", 0);
-        let path = if PathBuf::from("/mnt/node0").exists() {
-            PathBuf::from(filename)
-        } else {
-            #[cfg(any(test, feature = "integration_test"))]
-            {
-                PathBuf::from("test")
-            }
-            #[cfg(not(any(test, feature = "integration_test")))]
-            unreachable!()
-        };
-
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)
-            .unwrap();
-        file.set_len(layout.size() as u64).unwrap();
-
-        let mem = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                layout.size(),
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                file.as_raw_fd(),
-                0,
-            )
-        };
-        if mem == libc::MAP_FAILED {
-            panic!("Could not access data from memory mapped file")
-        }
+        let mem = unsafe { mmap_region("log", 0, layout) };
         let raw = unsafe { from_raw_parts_mut(mem as *mut Cell<Entry<T>>, num) };
 
         // Initialize all log entries by calling the default constructor.

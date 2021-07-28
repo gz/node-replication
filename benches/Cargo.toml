@@ -60,6 +60,12 @@ path = "hashmap.rs"
 required-features = ["nr"]
 
 [[bench]]
+name = "phashmap"
+harness = false
+path = "phashmap.rs"
+required-features = ["nr"]
+
+[[bench]]
 name = "vspace"
 harness = false
 path = "vspace.rs"

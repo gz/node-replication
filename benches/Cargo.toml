@@ -103,6 +103,7 @@ arr_macro = "0.1.2"
 static_assertions = "1.1.0"
 node-replication = { path = "../nr" }
 cnr = { path = "../cnr" }
+libc = "0.2.98"
 
 [features]
 smokebench = []

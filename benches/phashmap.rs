@@ -1,15 +1,16 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Defines a hash-map that can be replicated.
-#![allow(dead_code)]
+//! Defines a persistent hash-map that can be replicated.
 #![feature(test)]
 #![feature(bench_black_box)]
+#![feature(allocator_api)]
 
-use std::collections::HashMap;
+use hashbrown::{hash_map::DefaultHashBuilder, HashMap};
 use std::fmt::Debug;
 use std::marker::Sync;
 
+use pmem_allocator::PAllocator;
 use rand::seq::SliceRandom;
 use rand::{distributions::Distribution, Rng, RngCore};
 use zipf::ZipfDistribution;
@@ -18,11 +19,12 @@ use node_replication::Dispatch;
 use node_replication::Replica;
 
 mod mkbench;
+mod pmem_allocator;
 mod utils;
 
 use mkbench::ReplicaTrait;
 use utils::benchmark::*;
-use utils::topology::ThreadMapping;
+use utils::topology::{MachineTopology, ThreadMapping};
 use utils::Operation;
 
 /// The initial amount of entries all Hashmaps are initialized with
@@ -50,12 +52,14 @@ pub enum OpRd {
     Get(u64),
 }
 
+type Key = u64;
+type Value = u64;
 /// Single-threaded implementation of the stack
 ///
 /// We just use a vector.
 #[derive(Debug, Clone)]
 pub struct NrHashMap {
-    storage: HashMap<u64, u64>,
+    storage: HashMap<Key, Value, DefaultHashBuilder, PAllocator>,
 }
 
 impl NrHashMap {
@@ -71,10 +75,11 @@ impl NrHashMap {
 impl Default for NrHashMap {
     /// Return a dummy hash-map with `INITIAL_CAPACITY` elements.
     fn default() -> NrHashMap {
-        let mut storage = HashMap::with_capacity(INITIAL_CAPACITY);
+        let mut storage = HashMap::with_capacity_in(INITIAL_CAPACITY, pmem_allocator::PAllocator);
         for i in 0..INITIAL_CAPACITY {
             storage.insert(i as u64, (i + 1) as u64);
         }
+        // Somehow flush the CPU cache content to PMem.
         NrHashMap { storage }
     }
 }

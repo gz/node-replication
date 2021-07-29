@@ -170,8 +170,8 @@ impl MachineTopology {
     /// Return NUMA-id for the current core-id.
     pub fn get_numa_id(&self) -> Socket {
         let current_cpu = unsafe { libc::sched_getcpu() } as u64;
-        let socket: Vec<&CpuInfo> = self.data.iter().filter(|t| t.core == current_cpu).collect();
-        socket[0].socket
+        let cpu: &CpuInfo = self.data.iter().find(|t| t.cpu == current_cpu).unwrap();
+        cpu.socket
     }
 
     pub fn cpus_on_socket(&self, socket: Socket) -> Vec<&CpuInfo> {

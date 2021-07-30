@@ -4,13 +4,26 @@
 use core::ffi::c_void;
 use core::ptr::NonNull;
 use core::slice::from_raw_parts_mut;
+use std::cell::RefCell;
 
 use crate::MachineTopology;
 use node_replication::mmap_region;
 use std::alloc::{AllocError, Allocator};
 
-#[derive(Debug, Default, Copy, Clone)]
-pub struct PAllocator;
+#[derive(Debug, Clone)]
+pub struct PAllocator {
+    pub ptr: RefCell<*mut c_void>,
+    pub len: RefCell<usize>,
+}
+
+impl PAllocator {
+    pub fn new() -> PAllocator {
+        PAllocator {
+            ptr: RefCell::new(0x0 as *mut c_void),
+            len: RefCell::new(0),
+        }
+    }
+}
 
 unsafe impl Allocator for PAllocator {
     fn allocate(
@@ -20,8 +33,11 @@ unsafe impl Allocator for PAllocator {
         let topology = MachineTopology::new();
         let socket = topology.get_numa_id();
 
-        let ptr = unsafe { mmap_region("phashmap", socket, layout) as *mut u8 };
-        let slice = unsafe { from_raw_parts_mut(ptr, layout.size()) };
+        let ptr = unsafe { mmap_region("phashmap", socket, layout) };
+        *self.ptr.borrow_mut() = ptr;
+        *self.len.borrow_mut() = layout.size();
+
+        let slice = unsafe { from_raw_parts_mut(ptr as *mut u8, layout.size()) };
         let res = NonNull::new(slice).ok_or(AllocError);
         res
     }

@@ -75,11 +75,13 @@ impl NrHashMap {
 impl Default for NrHashMap {
     /// Return a dummy hash-map with `INITIAL_CAPACITY` elements.
     fn default() -> NrHashMap {
-        let mut storage = HashMap::with_capacity_in(INITIAL_CAPACITY, pmem_allocator::PAllocator);
+        let alloc = pmem_allocator::PAllocator::new();
+        let mut storage = HashMap::with_capacity_in(INITIAL_CAPACITY, alloc.clone());
         for i in 0..INITIAL_CAPACITY {
             storage.insert(i as u64, (i + 1) as u64);
         }
         // Somehow flush the CPU cache content to PMem.
+        unsafe { libc::msync(*alloc.ptr.borrow(), *alloc.len.borrow(), libc::MS_SYNC) };
         NrHashMap { storage }
     }
 }

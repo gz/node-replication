@@ -660,6 +660,22 @@ where
             operations[i - 1] = 0;
         }
     }
+
+    pub fn async_execute(
+        &self,
+        _op: <D as Dispatch>::ReadOperation,
+        _rid: ReplicaToken,
+    ) -> <D as Dispatch>::Response {
+        unreachable!()
+    }
+
+    pub fn async_execute_mut(
+        &self,
+        _op: <D as Dispatch>::WriteOperation,
+        _rid: ReplicaToken,
+    ) -> <D as Dispatch>::Response {
+        unreachable!()
+    }
 }
 
 #[cfg(test)]

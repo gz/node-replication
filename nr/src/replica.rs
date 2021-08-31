@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use core::cell::RefCell;
+use core::future::Future;
 use core::hint::spin_loop;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -661,20 +662,43 @@ where
         }
     }
 
-    pub fn async_execute(
-        &self,
-        _op: <D as Dispatch>::ReadOperation,
-        _rid: ReplicaToken,
-    ) -> <D as Dispatch>::Response {
-        unreachable!()
+    pub async fn async_execute(
+        &'a self,
+        op: <D as Dispatch>::ReadOperation,
+        rid: ReplicaToken,
+    ) -> impl Future<Output = <D as Dispatch>::Response> + 'a {
+        // We can perform the read only if our replica is synced up against
+        // the shared log. If it isn't, then try to combine until it is synced up.
+        let async_replica_sync = async move {
+            let ctail = self.slog.get_ctail();
+            while !self.slog.is_replica_synced_for_reads(self.idx, ctail) {
+                self.try_combine(rid.0);
+                spin_loop();
+            }
+        };
+
+        // Call the replica sync closure
+        async_replica_sync.await;
+
+        // Execute the read operation after syncing the replica.
+        async move { self.data.read(rid.0 - 1).dispatch(op) }
     }
 
-    pub fn async_execute_mut(
-        &self,
-        _op: <D as Dispatch>::WriteOperation,
-        _rid: ReplicaToken,
-    ) -> <D as Dispatch>::Response {
-        unreachable!()
+    pub async fn async_execute_mut(
+        &'a self,
+        op: <D as Dispatch>::WriteOperation,
+        rid: ReplicaToken,
+    ) -> impl Future<Output = <D as Dispatch>::Response> + 'a {
+        // Enqueue the operation onto the thread local batch and then try to flat combine.
+        let append = async { while !self.make_pending(op.clone(), rid.0) {} };
+        append.await;
+
+        // Either the thread quickly becomes the combiner or not.
+        // So, we don't need to make it asynchronus/
+        self.try_combine(rid.0);
+
+        // Return the response to the caller function.
+        async move { self.get_response(rid.0) }
     }
 }
 

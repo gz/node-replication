@@ -48,14 +48,20 @@ impl Dispatch for NrHashMap {
 }
 
 fn main() {
-    fn async_work(replica: Arc<Replica<NrHashMap>>) {
+    #[tokio::main]
+    async fn async_work(replica: Arc<Replica<NrHashMap>>) {
         let ridx = replica.register().expect("Unable to register with log");
         let loop_len = 32;
         for i in 0..loop_len {
             let _r = match i % 2 {
-                0 => replica.async_execute_mut(Modify::Put(i, i + 1), ridx),
+                0 => {
+                    replica
+                        .async_execute_mut(Modify::Put(i, i + 1), ridx)
+                        .await
+                        .await
+                }
                 1 => {
-                    let response = replica.async_execute(Access::Get(i - 1), ridx);
+                    let response = replica.async_execute(Access::Get(i - 1), ridx).await.await;
                     assert_eq!(response, Some(i));
                     response
                 }

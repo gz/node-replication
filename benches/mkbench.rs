@@ -28,7 +28,7 @@ use cnr::{Dispatch, Log, Replica, ReplicaToken};
 use csv::WriterBuilder;
 use log::*;
 #[cfg(feature = "nr")]
-use node_replication::{Dispatch, Log, Replica, ReplicaToken};
+use node_replication::{log::Log, replica::Replica, replica::ReplicaToken, Dispatch};
 use rand::seq::SliceRandom;
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
@@ -52,7 +52,7 @@ pub const WARN_THRESHOLD: usize = 1 << 28;
 type BenchFn<R> = fn(
     crate::utils::ThreadId,
     ReplicaToken,
-    &Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>,
+    &Arc<Log<<<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>,
     &Arc<R>,
     &Operation<
         <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
@@ -77,7 +77,7 @@ type BenchFn<R> = fn(
 pub trait ReplicaTrait {
     type D: Dispatch + Default + Sync;
 
-    fn new_arc(log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self>;
+    fn new_arc(log: Vec<Arc<Log<<Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self>;
 
     fn register_me(&self) -> Option<ReplicaToken>;
 
@@ -104,10 +104,10 @@ pub trait ReplicaTrait {
     ) -> <Self::D as Dispatch>::Response;
 }
 
-impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
+impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<T> {
     type D = T;
 
-    fn new_arc(log: Vec<Arc<Log<'static, <Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
+    fn new_arc(log: Vec<Arc<Log<<Self::D as Dispatch>::WriteOperation>>>) -> Arc<Self> {
         #[cfg(feature = "nr")]
         return Self::new(&log[0].clone());
         #[cfg(feature = "c_nr")]
@@ -425,7 +425,7 @@ where
     operations:
         Arc<Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>>,
     /// An Arc reference to the log.
-    log: Vec<Arc<Log<'static, <R::D as Dispatch>::WriteOperation>>>,
+    log: Vec<Arc<Log<<R::D as Dispatch>::WriteOperation>>>,
     /// Results of the benchmark we map the #iteration to a list of per-thread results
     /// (each per-thread stores completed ops in per-sec intervals).
     /// It's a hash-map so it acts like a cache i.e., we ensure to only save the latest
@@ -469,7 +469,7 @@ where
         >,
         batch_size: usize,
         sync: bool,
-        log: Vec<Arc<Log<'static, <R::D as Dispatch>::WriteOperation>>>,
+        log: Vec<Arc<Log<<R::D as Dispatch>::WriteOperation>>>,
         f: BenchFn<R>,
     ) -> ScaleBenchmark<R>
     where

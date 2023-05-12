@@ -1057,9 +1057,9 @@ mod test {
     #[should_panic(expected = "Succeeds (num_replicas < MAX_REPLICAS_PER_LOG")]
     fn test_add_replica_does_not_exceed_max_replicas() {
         let replicas = NonZeroUsize::new(1).unwrap();
-        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        let mut ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
         for _ in 0..MAX_REPLICAS_PER_LOG {
-            let _ = async_ds.add_replica();
+            let _ = ds.add_replica();
         }
     }
 

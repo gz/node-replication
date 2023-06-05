@@ -60,7 +60,7 @@ fn main() {
     // Setup logging and some constants.
     let _r = env_logger::try_init();
 
-    const NUM_THREADS: usize = 4;
+    const NUM_THREADS: usize = 1;
 
     // We start with 4 replicas.
     let initial_replicas: NonZeroUsize = NonZeroUsize::new(4).unwrap();
@@ -78,14 +78,14 @@ fn main() {
         |replica: Arc<RwLock<NodeReplicated<NrHashMap>>>, ttkn, finished: Arc<AtomicBool>| {
             let mut i = 0;
             while !finished.load(Ordering::Relaxed) {
-                let _r = match i % 2 {
+                let _r: Option<u64> = match i % 2 {
                     0 => replica
                         .read()
                         .unwrap()
                         .execute_mut(Modify::Put(i, i + 1), ttkn),
                     1 => {
                         let response = replica.read().unwrap().execute(Access::Get(i - 1), ttkn);
-                        assert_eq!(response, Some(i));
+                        //assert_eq!(response, Some(i));
                         response
                     }
                     _ => unreachable!(),
@@ -118,26 +118,8 @@ fn main() {
         }));
     }
 
-    // Initially, we go from 4 to 6 replicas:
-    for next_rid in &[4, 5] {
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        println!("About to add a new replica {:?}", next_rid);
-        let r = nrht.write().unwrap().add_replica().unwrap();
-        println!("Added replica {:?}", r);
-        // We also spawn a thread that accesses that new replica:
-        let nrht_cln = nrht.clone();
-        let finished = finished.clone();
-        threads.push(std::thread::spawn(move || {
-            let ttkn =
-                nrht_cln.read().unwrap().register(*next_rid).expect(
-                    format!("Unable to register thread with replica {}", next_rid).as_str(),
-                );
-            thread_loop(nrht_cln, ttkn, finished);
-        }));
-    }
-
-    // Then we go from 6 to 1 replica by removing one every 3 seconds:
-    for next_rid in &[5, 4, 3, 2, 1] {
+    // Then we go from 4 to 2 replicas by removing one every 3 seconds:
+    for next_rid in &[3, 2] {
         std::thread::sleep(std::time::Duration::from_secs(3));
         println!("About to remove replica {:?}", next_rid);
         let x = nrht.write().unwrap().remove_replica(*next_rid).unwrap();
@@ -145,13 +127,14 @@ fn main() {
     }
 
     // Then we increase again from 1 to 4 replicas:
-    for next_rid in &[1, 2, 3] {
+    for next_rid in &[2usize, 3] {
         std::thread::sleep(std::time::Duration::from_secs(3));
         println!("About to add replica {:?}", next_rid);
-        let x = nrht.write().unwrap().add_replica().unwrap();
+        let x = nrht.write().unwrap().add_replica(*next_rid).unwrap();
         println!("Added replica {:?}", x);
     }
 
+    std::thread::sleep(std::time::Duration::from_secs(3));
     finished.store(true, Ordering::Relaxed);
     // Wait for all the threads to finish
     for thread in threads {

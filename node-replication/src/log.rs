@@ -52,7 +52,7 @@ const_assert!(DEFAULT_LOG_BYTES.is_power_of_two());
 /// our system Can't make it arbitrarily high as it will lead to more memory
 /// overheads / bigger structs.
 #[cfg(not(loom))]
-pub const MAX_REPLICAS_PER_LOG: usize = 8;
+pub const MAX_REPLICAS_PER_LOG: usize = 5;
 #[cfg(loom)] // Otherwise uses too much stack space wich crashes in loom...
 pub const MAX_REPLICAS_PER_LOG: usize = 3;
 
@@ -404,7 +404,7 @@ where
     /// let idx = l.register().expect("Failed to register with the Log.");
     /// ```
     pub fn register(&self) -> Option<LogToken> {
-        for replica_id in 0..=MAX_REPLICAS_PER_LOG {
+        for replica_id in 0..MAX_REPLICAS_PER_LOG {
             if !self
                 .replica_inventory
                 .load_bit(replica_id, Ordering::Relaxed)
@@ -486,12 +486,21 @@ where
     /// Removes log entries for associated replicas. This is to allow dynamic adding and removing
     /// of replicas for memory efficiency & performance purposes.
     pub(crate) fn remove_log_replica(&mut self, log_token: LogToken) {
-        self.replica_inventory
-            .compare_and_swap(log_token.0, true, false, Ordering::Relaxed);
+        logging::info!("remove_log_replica {}", log_token.0);
+        assert!(self.replica_inventory
+            .compare_and_swap(log_token.0, true, false, Ordering::Relaxed));
         self.ltails
             .insert(log_token.0, CachePadded::new(AtomicUsize::new(0)));
         self.lmasks
             .insert(log_token.0, CachePadded::new(Cell::new(true)));
+    }
+
+    /// Add log etriesn for associated replicas. This is to allow dynamic adding and removing
+    /// of replicas for memory efficiency & performance purposes.
+    pub(crate) fn add_log_replica(&mut self, log_token: LogToken) {
+        logging::error!("add_log_replica {}", log_token.0);
+        self.replica_inventory
+            .compare_and_swap(log_token.0, false, true, Ordering::Relaxed);
     }
 
     /// Resets the log. This is required for microbenchmarking the log; with

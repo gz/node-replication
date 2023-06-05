@@ -33,8 +33,6 @@ pub struct PendingOperation<T, R, M> {
 }
 
 unsafe impl<T, R, M> Sync for PendingOperation<T, R, M> {}
-unsafe impl<T, R, M> Send for PendingOperation<T, R, M> {}
-
 
 impl<T, R, M> Default for PendingOperation<T, R, M>
 where

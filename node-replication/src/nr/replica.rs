@@ -21,7 +21,9 @@ use loom::sync::atomic::{AtomicUsize, Ordering};
 use super::context::Context;
 use super::log::{Log, LogToken};
 use super::rwlock::RwLock;
+use super::ContextIterator;
 use super::Dispatch;
+use super::MAX_THREADS_PER_INSTANCE;
 
 pub use crate::replica::ReplicaId;
 pub use crate::replica::ReplicaToken;
@@ -150,7 +152,7 @@ where
     /// Number of operations collected by the combiner from each thread at any
     /// given point of time. Index `i` holds the number of operations collected
     /// from thread with [`crate::replica::ThreadIdx`] `i + 1`.
-    inflight: RefCell<[usize; MAX_THREADS_PER_REPLICA]>,
+    inflight: RefCell<[usize; MAX_THREADS_PER_INSTANCE]>,
 
     /// A buffer of results collected after flat combining. With the help of
     /// `inflight`, the combiner enqueues these results into the appropriate
@@ -320,7 +322,7 @@ where
         Replica {
             log_tkn,
             combiner: CachePadded::new(AtomicUsize::new(0)),
-            next: CachePadded::new(AtomicUsize::new(1)),
+            next: CachePadded::new(AtomicUsize::new(0)),
             contexts,
             buffer:
                 RefCell::new(
@@ -332,7 +334,7 @@ where
                             >::batch_size(),
                     ),
                 ),
-            inflight: RefCell::new([0; MAX_THREADS_PER_REPLICA]),
+            inflight: RefCell::new([0; MAX_THREADS_PER_INSTANCE]),
             result:
                 RefCell::new(
                     Vec::with_capacity(
@@ -413,6 +415,7 @@ where
                 continue;
             };
 
+            //logging::info!("register() {idx}");
             return Some(ReplicaToken(idx));
         }
     }
@@ -478,18 +481,15 @@ where
     /// let res = replica.execute_mut(&log, 100, thrtkn);
     /// assert_eq!(None, res.unwrap());
     /// ```
-    pub fn execute_mut(
+    pub(crate) fn execute_mut(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::WriteOperation,
+        contexts: ContextIterator<D>,
         idx: ReplicaToken,
-    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
+    ) -> Result<(), ReplicaError<D>> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        while !self.make_pending(op.clone(), idx.tid()) {}
-        self.try_combine(slog)?;
-
-        // Return the response to the caller function.
-        self.get_response(slog, idx.tid())
+        self.try_combine(slog, contexts)
     }
 
     /// See [`Replica::execute_mut()`] for a general description of this method.
@@ -502,16 +502,16 @@ where
     /// Before calling, the client should have ensured that progress was made on
     /// the replica that was reported as stuck. Study [`crate::nr::NodeReplicated`]
     /// for an example on how to use this method.
-    pub fn execute_mut_locked<'lock>(
+    pub(crate) fn execute_mut_locked<'lock>(
         &'lock self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         _op: <D as Dispatch>::WriteOperation,
         idx: ReplicaToken,
+        contexts: ContextIterator<D>,
         combiner_lock: CombinerLock<'lock, D>,
-    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
+    ) -> Result<(), ReplicaError<D>> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.combine(slog, combiner_lock)?;
-        self.get_response(slog, idx.tid())
+        self.combine(slog, contexts, combiner_lock)
     }
 
     /// Executes an immutable operation against this replica and returns a
@@ -582,10 +582,11 @@ where
     /// # Implementation details
     /// Issues a read-only operation against the replica and returns a response.
     /// Makes sure the replica is synced up against the log before doing so.
-    pub fn execute<'rop>(
+    pub(crate) fn execute<'rop>(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation<'rop>,
+        contexts: ContextIterator<D>,
         idx: ReplicaToken,
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
@@ -593,13 +594,13 @@ where
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
         while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            if let Err(e) = self.try_combine(slog) {
+            if let Err(e) = self.try_combine(slog, contexts.clone()) {
                 return Err((e, op));
             }
             spin_loop();
         }
 
-        return Ok(self.data.read(idx.tid() - 1).dispatch(op));
+        return Ok(self.data.read(idx.tid()).dispatch(op));
     }
 
     /// See [`Replica::execute()`] for a general description of this method.
@@ -612,11 +613,12 @@ where
     /// Before calling, the client should have ensured that progress was made on
     /// the replica that was reported as stuck. Study [`crate::nr::NodeReplicated`]
     /// for an example on how to use this method.
-    pub fn execute_locked<'rop, 'lock>(
+    pub(crate) fn execute_locked<'rop, 'lock>(
         &'lock self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation<'rop>,
         idx: ReplicaToken,
+        contexts: ContextIterator<D>,
         combiner_lock: CombinerLock<'lock, D>,
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
@@ -624,7 +626,7 @@ where
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
         if !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            if let Err(e) = self.combine(slog, combiner_lock) {
+            if let Err(e) = self.combine(slog, contexts.clone(), combiner_lock) {
                 return Err((e, op));
             }
         }
@@ -633,7 +635,7 @@ where
         // make this assert fail?), we can get rid of the while below...
         assert!(slog.is_replica_synced_for_reads(&self.log_tkn, ctail));
         while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            if let Err(e) = self.try_combine(slog) {
+            if let Err(e) = self.try_combine(slog, contexts.clone()) {
                 return Err((e, op));
             }
             spin_loop();
@@ -642,6 +644,7 @@ where
         Ok(self.data.read(idx.tid() - 1).dispatch(op))
     }
 
+    /*
     /// Busy waits until a response is available within the thread's context.
     ///
     /// # Arguments
@@ -671,6 +674,7 @@ where
             }
         }
     }
+    */
 
     /// Executes a passed in closure against the replica's underlying data structure.
     /// Useful for unit testing; can be used to verify certain properties of the data
@@ -750,12 +754,12 @@ where
         }
     }
 
-    /// Enqueues an operation inside a thread local context. Returns a boolean
-    /// indicating whether the operation was enqueued (true) or not (false).
-    #[inline(always)]
-    fn make_pending(&self, op: <D as Dispatch>::WriteOperation, idx: usize) -> bool {
-        self.contexts[idx - 1].enqueue(op, ())
-    }
+    // Enqueues an operation inside a thread local context. Returns a boolean
+    // indicating whether the operation was enqueued (true) or not (false).
+    //#[inline(always)]
+    //fn make_pending(&self, op: <D as Dispatch>::WriteOperation, idx: usize) -> bool {
+    //    self.contexts[idx - 1].enqueue(op, ())
+    //}
 
     // Try to become acquire the combiner lock here. If this fails, then return None.
     #[inline(always)]
@@ -788,11 +792,12 @@ where
     fn try_combine<'r>(
         &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
+        contexts: ContextIterator<D>,
     ) -> Result<(), ReplicaError<D>> {
         // Try to become the combiner here. If this fails, then simply return.
         if let Some(combiner_lock) = self.acquire_combiner_lock() {
             // Successfully became the combiner; perform one round of flat combining.
-            self.combine(slog, combiner_lock)?;
+            self.combine(slog, contexts, combiner_lock)?;
             Ok(())
         } else {
             #[cfg(loom)]
@@ -818,16 +823,26 @@ where
     }
 
     #[inline(always)]
-    fn collect_thread_ops(&self, buffer: &mut Vec<D::WriteOperation>, operations: &mut [usize]) {
+    fn collect_thread_ops(
+        &self,
+        contexts: ContextIterator<D>,
+        buffer: &mut Vec<D::WriteOperation>,
+        operations: &mut [usize],
+    ) {
         let num_registered_threads = self.next.load(Ordering::Relaxed);
 
         // Collect operations from each thread registered with this replica.
-        for i in 1..num_registered_threads {
-            let ctxt_iter = self.contexts[i - 1].iter();
-            operations[i - 1] = ctxt_iter.len();
+        //logging::error!("collect_thread_ops");
+
+        for (i, context) in contexts.enumerate() {
+            //logging::error!("context is {i}");
+            let ctxt_iter = context.iter();
+            operations[i] = ctxt_iter.len();
+            //logging::error!("adding {}", ctxt_iter.len());
             // meta-data is (), throw it away
             buffer.extend(ctxt_iter.map(|op| op.0));
         }
+        //logging::error!("collect_thread_ops done");
     }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
@@ -835,16 +850,18 @@ where
     pub(crate) fn combine<'r>(
         &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
+        contexts: ContextIterator<D>,
         combiner_lock: CombinerLock<'r, D>,
     ) -> Result<(), ReplicaError<D>> {
-        let num_registered_threads = self.next.load(Ordering::Relaxed);
+        let num_registered_threads = contexts.clone().count();
+        //logging::info!("combine {num_registered_threads}");
         let mut results = self.result.borrow_mut();
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
         results.clear();
         buffer.clear();
 
-        self.collect_thread_ops(&mut buffer, operations.as_mut_slice());
+        self.collect_thread_ops(contexts.clone(), &mut buffer, operations.as_mut_slice());
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
@@ -889,17 +906,32 @@ where
 
         // Return/Enqueue responses back into the appropriate thread context(s).
         let (mut s, mut f) = (0, 0);
+        for (idx, context) in contexts.enumerate() {
+            if operations[idx] == 0 {
+                continue;
+            };
+
+            f += operations[idx];
+            //logging::info!("enqueue_resps {idx} {f} {}", results[s..f].len());
+            context.enqueue_resps(&results[s..f]);
+            s += operations[idx];
+            operations[idx] = 0;
+        }
+
+        /*
         for i in 1..num_registered_threads {
             if operations[i - 1] == 0 {
                 continue;
             };
 
             f += operations[i - 1];
+            logging::info!("enqueue_resps");
             self.contexts[i - 1].enqueue_resps(&results[s..f]);
             s += operations[i - 1];
             operations[i - 1] = 0;
-        }
+        }*/
 
+        //logging::info!("enqueue_resps done");
         res
     }
 }

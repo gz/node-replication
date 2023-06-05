@@ -176,6 +176,7 @@ impl ThreadToken {
     }
 
     pub fn gtid(&self) -> usize {
+        //logging::info!("self.rid={} self.rtkn.0={}", self.rid, self.rtkn.0);
         self.rid * MAX_THREADS_PER_REPLICA + self.rtkn.0
     }
 }
@@ -424,7 +425,7 @@ where
             let log_token = log
                 .register()
                 .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
-
+            logging::info!("created {replica_id} {log_token:?}");
             let r = {
                 // Allocate the replica on the proper NUMA node
                 let _aff_tkn = affinity_mngr.switch(replica_id);
@@ -461,12 +462,8 @@ where
     /// let added_replica_data = async_ds.replicas[added_replica].data.read(0).junk;
     /// assert_eq!(2, added_replica_data);
     /// ```
-    pub fn add_replica(&mut self) -> Result<(), NodeReplicatedError> {
-        let log_token = self
-            .log
-            .register()
-            .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
-
+    pub fn add_replica(&mut self, replica_id: ReplicaId) -> Result<(), NodeReplicatedError> {
+        let log_token = log::LogToken(replica_id+1);
         let r = {
             // Allocate the replica on the proper NUMA node
             let _aff_tkn = self.affinity_mngr.switch(self.replicas.len());
@@ -474,10 +471,10 @@ where
             // aff_tkn is dropped here
         };
 
-        let replica_id = self.new_replica_id();
+        logging::error!("Adding replica {replica_id}");
 
         if self.replicas.contains_key(&replica_id) {
-            return core::prelude::v1::Err(NodeReplicatedError::DuplicateReplica);
+            return Err(NodeReplicatedError::DuplicateReplica);
         }
 
         self.replicas.insert(replica_id, r);
@@ -488,7 +485,7 @@ where
         // copy data from existing replica
         let replica_locked = self.replicas[&max_replica_idx]
             .data
-            .read(log_token.0)
+            .read(0)
             .clone();
         let new_replica_data = &mut self.replicas[&replica_id].data.write(log_token.0);
         **new_replica_data = replica_locked;
@@ -499,6 +496,11 @@ where
         // find and push existing lmask entry for new replica
         let lmask_status = self.log.lmasks[&max_replica_idx].get();
         self.log.lmasks[&replica_id].set(lmask_status);
+        logging::error!(
+            "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks[&replica_id] {:?}",
+            self.log.lmasks[&replica_id].get()
+        );
+        self.log.add_log_replica(log_token);
 
         // Register the the replica with a thread_id and return the ThreadToken
         //let registered_replica = self.register(replica_id);
@@ -514,7 +516,7 @@ where
         &mut self,
         replica_id: ReplicaId,
     ) -> Result<ReplicaId, NodeReplicatedError> {
-        self.log.remove_log_replica(log::LogToken(replica_id));
+        self.log.remove_log_replica(log::LogToken(replica_id+1));
 
         if self.replicas.contains_key(&replica_id) {
             self.replicas.remove(&replica_id);
@@ -609,13 +611,24 @@ where
         tkn: ThreadToken,
         cl: Option<CombinerLock<'a, D>>,
     ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
+        let rid = self.select_replica(tkn);
+        let contexts = self.context_iterator(rid);
+
         if let Some(combiner_lock) = cl {
             // We expect to have already enqueued the op (it's a re-try since have the combiner lock),
             // so technically its not needed to supply it again (but we currently do it anyways...)
-            self.replicas[&tkn.rid].execute_mut_locked(&self.log, op, tkn.rtkn, combiner_lock)
+            self.replicas[&rid].execute_mut_locked(
+                &self.log,
+                op,
+                tkn.rtkn,
+                contexts,
+                combiner_lock,
+            )?;
         } else {
-            self.replicas[&tkn.rid].execute_mut(&self.log, op, tkn.rtkn)
+            self.replicas[&rid].execute_mut(&self.log, op, contexts, tkn.rtkn)?;
         }
+
+        Ok(self.get_response(tkn))
     }
 
     /// Executes a mutable operation against the data-structure.
@@ -709,7 +722,7 @@ where
 
                         //return self.replicas[&tkn.rid]
                         //.get_response(&self.log, tkn.rtkn.tid())
-                        //.expect("GcFailed has to produced a response");
+                        //.expect("GcFailed has to produce a response");
                         return self.get_response(tkn);
                     }
                 },
@@ -732,10 +745,13 @@ where
         cl: Option<CombinerLock<'a, D>>,
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
+        let rid = self.select_replica(tkn);
+        let contexts = self.context_iterator(rid);
+
         if let Some(combiner_lock) = cl {
-            self.replicas[&tkn.rid].execute_locked(&self.log, op, tkn.rtkn, combiner_lock)
+            self.replicas[&rid].execute_locked(&self.log, op, tkn.rtkn, contexts, combiner_lock)
         } else {
-            self.replicas[&tkn.rid].execute(&self.log, op, tkn.rtkn)
+            self.replicas[&rid].execute(&self.log, op, contexts, tkn.rtkn)
         }
     }
 
@@ -878,28 +894,22 @@ where
 
     fn select_replica2(&self, tkn: ThreadToken) -> ReplicaId {
         let replicas = self.replicas.keys().fold(0, |acc, rid| acc | (1 << rid)) as usize;
-        logging::info!("replicas: {:b}", replicas);
+        //logging::info!("replicas: {:b}", replicas);
 
         if ((1 << tkn.rid) & replicas) > 0 {
             // Use the replica where the thread originally registered with if it
             // exists
-            logging::info!("using original replica: {}", tkn.rid);
+            //logging::info!("using original replica: {}", tkn.rid);
             tkn.rid
-        }
-        else {
+        } else {
             let key_idx = tkn.rtkn.0 % (replicas.count_ones() as usize);
-            logging::info!("key_idx: {key_idx}");
             let mut replicas = replicas;
-            logging::info!("replica: {:b}", replicas);
             let mut idx = 0;
-            logging::info!("idx: {idx}");
             let mut replica_idx = 0;
-            logging::info!("replica_idx: {replica_idx}");
 
             while idx <= key_idx {
                 replica_idx += replicas.trailing_zeros();
-                logging::info!("replica_idx: {replica_idx} leading zeros was {}", replicas.trailing_zeros());
-                replicas <<= replicas.trailing_zeros()+1;
+                replicas <<= replicas.trailing_zeros() + 1;
                 idx += 1;
             }
 
@@ -907,12 +917,12 @@ where
         }
     }
 
-
-    fn context_iterator(&self, for_replica: ReplicaId) -> ContextIterator<D> {
+    pub(crate) fn context_iterator(&self, for_replica: ReplicaId) -> ContextIterator<D> {
         ContextIterator {
             contexts: &self.contexts,
             for_replica,
             next_idx: 0,
+            active_replicas: self.replicas.keys().fold(0, |acc, rid| acc | (1 << rid)) as usize,
         }
     }
 
@@ -920,29 +930,33 @@ where
     /// indicating whether the operation was enqueued (true) or not (false).
     #[inline(always)]
     fn make_pending(&self, op: <D as Dispatch>::WriteOperation, idx: usize) -> bool {
-        self.contexts[idx - 1].enqueue(op, ())
+        self.contexts[idx].enqueue(op, ())
     }
 
     /// Busy waits until a response is available within the thread's context.
     ///
     /// # Arguments
-    /// - `slog`: The shared log.
-    /// - `idx`: identifies this thread.
+    /// - `tkn`: identifies this thread.
     pub(crate) fn get_response(&self, tkn: ThreadToken) -> <D as Dispatch>::Response {
         let mut iter = 0;
-        let interval = 1 << 29;
+        let interval = 1 << 24;
 
         // Keep trying to retrieve a response from the thread context. After trying `interval`
         // times with no luck, try to perform flat combining to make some progress.
         loop {
+            //logging::info!("before res {}", tkn.gtid());
             let r = self.contexts[tkn.gtid()].res();
+            //logging::info!("after res");
+
             if let Some(resp) = r {
+                //logging::info!("found a resp");
                 return resp;
             }
 
             iter += 1;
 
             if iter == interval {
+                //logging::info!("nothing,callig symc");
                 self.sync(tkn);
                 iter = 0;
             }
@@ -951,33 +965,64 @@ where
 
     #[doc(hidden)]
     pub fn sync(&self, tkn: ThreadToken) {
-        self.replicas[&tkn.rid].sync(&self.log)
+        let rid = self.select_replica(tkn);
+        self.replicas[&rid].sync(&self.log)
     }
 }
 
-struct ContextIterator<'a, D: Dispatch> {
+#[derive(Clone)]
+pub(crate) struct ContextIterator<'a, D: Dispatch> {
     contexts: &'a Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
+    active_replicas: usize,
     for_replica: ReplicaId,
     next_idx: usize,
 }
 
-/*
+impl<'a, D: Dispatch> ContextIterator<'a, D> {
+    fn context_to_replica(&self, rid: usize, tid: usize) -> ReplicaId {
+        let replicas = self.active_replicas;
+        //logging::info!("replicas: {:b}", replicas);
+
+        if ((1 << rid) & replicas) > 0 {
+            // Use the replica where the thread originally registered with if it
+            // exists
+            rid
+        } else {
+            let key_idx = tid % (replicas.count_ones() as usize);
+            let mut replicas = replicas;
+            let mut idx = 0;
+            let mut replica_idx = 0;
+
+            while idx <= key_idx {
+                replica_idx += replicas.trailing_zeros();
+                replicas <<= replicas.trailing_zeros() + 1;
+                idx += 1;
+            }
+
+            replica_idx as usize
+        }
+    }
+}
+
 impl<'a, D: Dispatch> core::iter::Iterator for ContextIterator<'a, D> {
     type Item = &'a Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.next_idx < self.contexts.len() {
             let idx = self.next_idx;
+            let rid = idx / MAX_THREADS_PER_REPLICA;
+            let tid = idx % MAX_THREADS_PER_REPLICA;
             self.next_idx += 1;
 
-            if let Some(ctx) = self.contexts[idx] {
-                return Some(ctx);
+            if self.context_to_replica(rid, tid) == self.for_replica {
+                return Some(&self.contexts[idx]);
+            } else {
+                continue;
             }
         }
         None
     }
 }
-*/
 
 #[cfg(test)]
 mod test {
@@ -1002,23 +1047,44 @@ mod test {
         let nds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
 
         assert_eq!(nds.select_replica(mkttkn(0, 0)), 0);
-        assert_eq!(nds.select_replica(mkttkn(0, 0)), nds.select_replica2(mkttkn(0, 0)));
+        assert_eq!(
+            nds.select_replica(mkttkn(0, 0)),
+            nds.select_replica2(mkttkn(0, 0))
+        );
         assert_eq!(nds.select_replica(mkttkn(1, 1)), 1);
-        assert_eq!(nds.select_replica(mkttkn(1, 1)), nds.select_replica2(mkttkn(1, 1)));
+        assert_eq!(
+            nds.select_replica(mkttkn(1, 1)),
+            nds.select_replica2(mkttkn(1, 1))
+        );
 
         // Doesn't have active replica, assign to 0 or 1:
         assert_eq!(nds.select_replica(mkttkn(3, 0)), 0);
-        assert_eq!(nds.select_replica(mkttkn(3, 0)), nds.select_replica2(mkttkn(3, 0)));
+        assert_eq!(
+            nds.select_replica(mkttkn(3, 0)),
+            nds.select_replica2(mkttkn(3, 0))
+        );
         // Threads on same (inactive) replicas are split evenly among active
         // replicas:
         assert_eq!(nds.select_replica(mkttkn(3, 1)), 1);
-        assert_eq!(nds.select_replica(mkttkn(3, 1)), nds.select_replica2(mkttkn(3, 1)));
+        assert_eq!(
+            nds.select_replica(mkttkn(3, 1)),
+            nds.select_replica2(mkttkn(3, 1))
+        );
         assert_eq!(nds.select_replica(mkttkn(3, 2)), 0);
-        assert_eq!(nds.select_replica(mkttkn(3, 2)), nds.select_replica2(mkttkn(3, 2)));
+        assert_eq!(
+            nds.select_replica(mkttkn(3, 2)),
+            nds.select_replica2(mkttkn(3, 2))
+        );
         assert_eq!(nds.select_replica(mkttkn(4, 0)), 0);
-        assert_eq!(nds.select_replica(mkttkn(4, 0)), nds.select_replica2(mkttkn(4, 0)));
+        assert_eq!(
+            nds.select_replica(mkttkn(4, 0)),
+            nds.select_replica2(mkttkn(4, 0))
+        );
         assert_eq!(nds.select_replica(mkttkn(4, 1)), 1);
-        assert_eq!(nds.select_replica(mkttkn(4, 1)), nds.select_replica2(mkttkn(4, 1)));
+        assert_eq!(
+            nds.select_replica(mkttkn(4, 1)),
+            nds.select_replica2(mkttkn(4, 1))
+        );
     }
 
     #[cfg(feature = "async")]

@@ -641,7 +641,7 @@ where
             spin_loop();
         }
 
-        Ok(self.data.read(idx.tid() - 1).dispatch(op))
+        Ok(self.data.read(idx.tid()).dispatch(op))
     }
 
     /*
@@ -789,7 +789,7 @@ where
 
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    fn try_combine<'r>(
+    pub(crate) fn try_combine<'r>(
         &'r self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
@@ -907,12 +907,12 @@ where
         // Return/Enqueue responses back into the appropriate thread context(s).
         let (mut s, mut f) = (0, 0);
         for (idx, context) in contexts.enumerate() {
+            //logging::info!("enqueue_resps {idx} operations[idx]={} context={:p}", operations[idx], context);
             if operations[idx] == 0 {
                 continue;
             };
 
             f += operations[idx];
-            //logging::info!("enqueue_resps {idx} {f} {}", results[s..f].len());
             context.enqueue_resps(&results[s..f]);
             s += operations[idx];
             operations[idx] = 0;

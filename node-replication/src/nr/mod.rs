@@ -410,7 +410,7 @@ where
         chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
         log_size: usize,
     ) -> Result<Self, NodeReplicatedError> {
-        assert!(num_replicas.get() < MAX_REPLICAS_PER_LOG);
+        assert!(num_replicas.get() <= MAX_REPLICAS_PER_LOG);
         let affinity_mngr = AffinityManager::new(Box::try_new(chg_mem_affinity)?);
         let log = Log::new_with_bytes(log_size, ());
 
@@ -686,6 +686,7 @@ where
         op: <D as Dispatch>::WriteOperation,
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
+        //logging::info!("execute mut on {:?}", tkn);
         while !self.make_pending(op.clone(), tkn.gtid()) {}
 
         /// An enum to keep track of a stack of operations we should do on Replicas.
@@ -723,6 +724,7 @@ where
                         //return self.replicas[&tkn.rid]
                         //.get_response(&self.log, tkn.rtkn.tid())
                         //.expect("GcFailed has to produce a response");
+                        logging::info!("we're in gc failed");
                         return self.get_response(tkn);
                     }
                 },
@@ -944,23 +946,30 @@ where
         // Keep trying to retrieve a response from the thread context. After trying `interval`
         // times with no luck, try to perform flat combining to make some progress.
         loop {
-            //logging::info!("before res {}", tkn.gtid());
             let r = self.contexts[tkn.gtid()].res();
             //logging::info!("after res");
 
             if let Some(resp) = r {
-                //logging::info!("found a resp");
+                //logging::info!("found a resp for tkn = {:?} gtid={}", tkn, tkn.gtid());
                 return resp;
             }
 
             iter += 1;
 
             if iter == interval {
-                //logging::info!("nothing,callig symc");
-                self.sync(tkn);
+                logging::info!("nothing, calling sync from {:?} context={:p}", tkn, &self.contexts[tkn.gtid()]);
+                let _r = self.try_combine(tkn).unwrap();
                 iter = 0;
             }
         }
+    }
+    
+    #[doc(hidden)]
+    fn try_combine(&self, tkn: ThreadToken) -> Result<(), ReplicaError<D>> {
+        let rid = self.select_replica(tkn);
+        let contexts = self.context_iterator(rid);
+
+        self.replicas[&rid].try_combine(&self.log, contexts)
     }
 
     #[doc(hidden)]
@@ -999,6 +1008,8 @@ impl<'a, D: Dispatch> ContextIterator<'a, D> {
                 idx += 1;
             }
 
+            //logging::debug!("since {rid} isn't active we are routing thread={tid} to {replica_idx} instead");
+
             replica_idx as usize
         }
     }
@@ -1015,6 +1026,7 @@ impl<'a, D: Dispatch> core::iter::Iterator for ContextIterator<'a, D> {
             self.next_idx += 1;
 
             if self.context_to_replica(rid, tid) == self.for_replica {
+                //logging::debug!("context iterator returning context idx={} rid={} tid={} self.for_replica={}", idx, rid, tid, self.for_replica);
                 return Some(&self.contexts[idx]);
             } else {
                 continue;

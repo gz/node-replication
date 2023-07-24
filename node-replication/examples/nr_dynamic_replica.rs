@@ -60,7 +60,7 @@ fn main() {
     // Setup logging and some constants.
     let _r = env_logger::try_init();
 
-    const NUM_THREADS: usize = 1;
+    const NUM_THREADS: usize = 8;
 
     // We start with 4 replicas.
     let initial_replicas: NonZeroUsize = NonZeroUsize::new(4).unwrap();
@@ -118,9 +118,11 @@ fn main() {
         }));
     }
 
+    std::thread::sleep(std::time::Duration::from_secs(12));
+
     // Then we go from 4 to 2 replicas by removing one every 3 seconds:
     for next_rid in &[3, 2] {
-        std::thread::sleep(std::time::Duration::from_secs(3));
+        std::thread::sleep(std::time::Duration::from_secs(6));
         println!("About to remove replica {:?}", next_rid);
         let x = nrht.write().unwrap().remove_replica(*next_rid).unwrap();
         println!("Removed replica {:?}", x);
@@ -128,7 +130,7 @@ fn main() {
 
     // Then we increase again from 1 to 4 replicas:
     for next_rid in &[2usize, 3] {
-        std::thread::sleep(std::time::Duration::from_secs(3));
+        std::thread::sleep(std::time::Duration::from_secs(6));
         println!("About to add replica {:?}", next_rid);
         let x = nrht.write().unwrap().add_replica(*next_rid).unwrap();
         println!("Added replica {:?}", x);

@@ -235,10 +235,10 @@ where
     let bench_name = format!("{}-scaleout-wr{}", name, write_ratio);
 
     mkbench::ScaleBenchBuilder::<R>::new(ops)
-        .thread_defaults()
-        //.threads(1)
-        //.threads(73)
-        //.threads(96)
+        //.thread_defaults()
+        .threads(4)
+        .threads(64)
+        .threads(128)
         //.threads(192)
         .update_batch(32)
         .log_size(32 * 1024 * 1024)
@@ -331,7 +331,7 @@ fn main() {
     } else if cfg!(feature = "smokebench") {
         vec![10]
     } else {
-        vec![0, 10, 100]
+        vec![10]
     };
 
     unsafe {

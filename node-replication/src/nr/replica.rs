@@ -134,14 +134,6 @@ where
     /// with the replica when calling [`Replica::register()`].
     next: CachePadded<AtomicUsize>,
 
-    /// List of per-thread contexts. Threads buffer write operations here when
-    /// they cannot perform flat combining (because another thread might already
-    /// be doing so).
-    ///
-    /// The vector is initialized with [`MAX_THREADS_PER_REPLICA`] [`Context`]
-    /// elements.
-    contexts: Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
-
     /// A buffer of operations for flat combining.
     ///
     /// The combiner stages operations in this vector and then batch appends
@@ -313,17 +305,10 @@ where
     ///   data-structure. If not, operations when executed on different replicas
     ///   may give different results.
     pub fn with_data(log_tkn: LogToken, d: D) -> Replica<D> {
-        let mut contexts = Vec::with_capacity(MAX_THREADS_PER_REPLICA);
-        // Add `MAX_THREADS_PER_REPLICA` contexts
-        for _idx in 0..MAX_THREADS_PER_REPLICA {
-            contexts.push(Default::default());
-        }
-
         Replica {
             log_tkn,
             combiner: CachePadded::new(AtomicUsize::new(0)),
             next: CachePadded::new(AtomicUsize::new(0)),
-            contexts,
             buffer:
                 RefCell::new(
                     Vec::with_capacity(
@@ -484,9 +469,7 @@ where
     pub(crate) fn execute_mut(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
-        op: <D as Dispatch>::WriteOperation,
         contexts: ContextIterator<D>,
-        idx: ReplicaToken,
     ) -> Result<(), ReplicaError<D>> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
         self.try_combine(slog, contexts)
@@ -505,8 +488,6 @@ where
     pub(crate) fn execute_mut_locked<'lock>(
         &'lock self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
-        _op: <D as Dispatch>::WriteOperation,
-        idx: ReplicaToken,
         contexts: ContextIterator<D>,
         combiner_lock: CombinerLock<'lock, D>,
     ) -> Result<(), ReplicaError<D>> {
@@ -754,13 +735,6 @@ where
         }
     }
 
-    // Enqueues an operation inside a thread local context. Returns a boolean
-    // indicating whether the operation was enqueued (true) or not (false).
-    //#[inline(always)]
-    //fn make_pending(&self, op: <D as Dispatch>::WriteOperation, idx: usize) -> bool {
-    //    self.contexts[idx - 1].enqueue(op, ())
-    //}
-
     // Try to become acquire the combiner lock here. If this fails, then return None.
     #[inline(always)]
     fn acquire_combiner_lock(&self) -> Option<CombinerLock<D>> {
@@ -829,20 +803,13 @@ where
         buffer: &mut Vec<D::WriteOperation>,
         operations: &mut [usize],
     ) {
-        let num_registered_threads = self.next.load(Ordering::Relaxed);
-
         // Collect operations from each thread registered with this replica.
-        //logging::error!("collect_thread_ops");
-
         for (i, context) in contexts.enumerate() {
-            //logging::error!("context is {i}");
             let ctxt_iter = context.iter();
             operations[i] = ctxt_iter.len();
-            //logging::error!("adding {}", ctxt_iter.len());
             // meta-data is (), throw it away
             buffer.extend(ctxt_iter.map(|op| op.0));
         }
-        //logging::error!("collect_thread_ops done");
     }
 
     /// Performs one round of flat combining. Collects, appends and executes operations.
@@ -854,7 +821,6 @@ where
         combiner_lock: CombinerLock<'r, D>,
     ) -> Result<(), ReplicaError<D>> {
         let num_registered_threads = contexts.clone().count();
-        //logging::info!("combine {num_registered_threads}");
         let mut results = self.result.borrow_mut();
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();
@@ -918,20 +884,6 @@ where
             operations[idx] = 0;
         }
 
-        /*
-        for i in 1..num_registered_threads {
-            if operations[i - 1] == 0 {
-                continue;
-            };
-
-            f += operations[i - 1];
-            logging::info!("enqueue_resps");
-            self.contexts[i - 1].enqueue_resps(&results[s..f]);
-            s += operations[i - 1];
-            operations[i - 1] = 0;
-        }*/
-
-        //logging::info!("enqueue_resps done");
         res
     }
 }

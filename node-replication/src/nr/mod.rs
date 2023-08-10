@@ -70,8 +70,6 @@
 //! }
 //! ```
 
-extern crate std;
-
 use alloc::collections::BTreeMap;
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt::Debug;
@@ -99,6 +97,7 @@ pub mod rwlock;
 #[path = "loom_rwlock.rs"]
 pub mod rwlock;
 
+use crate::nr::atomic_bitmap::DEFAULT_BITMAP;
 use crate::nr::context::Context;
 pub use log::{Log, MAX_REPLICAS_PER_LOG};
 pub use replica::{CombinerLock, Replica, ReplicaError, ReplicaId, ReplicaToken};
@@ -177,7 +176,7 @@ impl ThreadToken {
         Self { rid, rtkn }
     }
 
-    pub fn gtid(&self) -> usize {
+    fn gtid(&self) -> usize {
         //logging::info!("self.rid={} self.rtkn.0={}", self.rid, self.rtkn.0);
         self.rid * MAX_THREADS_PER_REPLICA + self.rtkn.0
     }
@@ -325,13 +324,13 @@ impl From<alloc::collections::TryReserveError> for NodeReplicatedError {
 pub struct NodeReplicated<D: Dispatch + Sync + Clone> {
     log: Log<D::WriteOperation>,
     replicas: BTreeMap<usize, Replica<D>>,
-    registered_threads_map: AtomicBitmap,
+    thread_routing: [AtomicBitmap; MAX_REPLICAS_PER_LOG],
     /// List of per-thread contexts. Threads buffer write operations here when
     /// they cannot perform flat combining (because another thread might already
     /// be doing so).
     ///
-    /// The vector is initialized with [`MAX_THREADS_PER_REPLICA`] [`Context`]
-    /// elements.
+    /// The vector is initialized with `replicas.len()` times
+    /// [`MAX_THREADS_PER_REPLICA`] [`Context`] elements.
     contexts: Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
     affinity_mngr: AffinityManager,
 }
@@ -414,11 +413,12 @@ where
         log_size: usize,
     ) -> Result<Self, NodeReplicatedError> {
         assert!(num_replicas.get() <= MAX_REPLICAS_PER_LOG);
+        let max_replicas = num_replicas.get();
         let affinity_mngr = AffinityManager::new(Box::try_new(chg_mem_affinity)?);
         let log = Log::new_with_bytes(log_size, ());
 
-        let mut contexts = Vec::with_capacity(MAX_THREADS_PER_INSTANCE);
-        for _idx in 0..MAX_THREADS_PER_INSTANCE {
+        let mut contexts = Vec::with_capacity(max_replicas * MAX_THREADS_PER_REPLICA);
+        for _idx in 0..(max_replicas * MAX_THREADS_PER_REPLICA) {
             contexts.push(Default::default());
         }
 
@@ -428,7 +428,6 @@ where
             let log_token = log
                 .register()
                 .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
-            logging::info!("created {replica_id} {log_token:?}");
             let r = {
                 // Allocate the replica on the proper NUMA node
                 let _aff_tkn = affinity_mngr.switch(replica_id);
@@ -439,11 +438,12 @@ where
             replicas.insert(replica_id, r);
         }
 
+        const THREAD_ROUTING_DEFAULT: AtomicBitmap = DEFAULT_BITMAP;
         Ok(NodeReplicated {
             contexts,
             log,
             replicas,
-            registered_threads_map: AtomicBitmap::default(),
+            thread_routing: [THREAD_ROUTING_DEFAULT; MAX_REPLICAS_PER_LOG],
             affinity_mngr,
         })
     }
@@ -580,7 +580,7 @@ where
         if self.replicas.len() < MAX_REPLICAS_PER_LOG {
             let rtkn = self.replicas[&replica_id].register()?;
             let ttkn = ThreadToken::new(replica_id, rtkn);
-            self.registered_threads_map.set_bit(ttkn.gtid());
+            self.thread_routing[replica_id].set_bit(ttkn.gtid());
 
             Some(ttkn)
         } else {
@@ -896,10 +896,7 @@ where
     pub(crate) fn context_iterator(&self, for_replica: ReplicaId) -> ContextIterator<D> {
         ContextIterator {
             contexts: &self.contexts,
-            for_replica,
-            next_idx: 0,
-            active_threads: self.registered_threads_map.clone(),
-            active_replicas: self.replicas.keys().fold(0, |acc, rid| acc | (1 << rid)) as usize,
+            active_threads: self.thread_routing[for_replica].clone(),
         }
     }
 
@@ -961,15 +958,13 @@ where
 pub(crate) struct ContextIterator<'a, D: Dispatch> {
     contexts: &'a Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
     active_threads: AtomicBitmap,
-    active_replicas: usize,
-    for_replica: ReplicaId,
-    next_idx: usize,
 }
 
-impl<'a, D: Dispatch> ContextIterator<'a, D> {
+/*impl<'a, D: Dispatch> ContextIterator<'a, D> {
     fn context_to_replica(&self, rid: usize, tid: usize) -> ReplicaId {
         let replicas = self.active_replicas;
         //logging::info!("replicas: {:b}", replicas);
+        //logging::info!("replicas: {:b} {rid}", replicas);
 
         if ((1 << rid) & replicas) > 0 {
             // Use the replica where the thread originally registered with if it
@@ -990,28 +985,20 @@ impl<'a, D: Dispatch> ContextIterator<'a, D> {
             replica_idx as usize
         }
     }
-}
+}*/
 
 impl<'a, D: Dispatch> core::iter::Iterator for ContextIterator<'a, D> {
     type Item = &'a Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.next_idx < self.contexts.len() {
-            let idx = self.next_idx;
-            let rid = idx / MAX_THREADS_PER_REPLICA;
-            let tid = idx % MAX_THREADS_PER_REPLICA;
-            let ttkn = ThreadToken::new(rid, ReplicaToken(tid));
-            self.next_idx += 1;
+        let active_threads = self.active_threads.snapshot();
 
-            if self.active_threads.test_bit(ttkn.gtid())
-                && self.context_to_replica(rid, tid) == self.for_replica
-            {
-                //logging::debug!("context iterator returning context idx={} rid={} tid={} self.for_replica={}", idx, rid, tid, self.for_replica);
-                return Some(&self.contexts[idx]);
-            } else {
-                continue;
-            }
+        if active_threads > 0 {
+            let next_gtid = active_threads.trailing_zeros() as usize;
+            self.active_threads.clear_bit(next_gtid);
+            return Some(&self.contexts[next_gtid]);
         }
+
         None
     }
 }

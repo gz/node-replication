@@ -236,14 +236,14 @@ where
 
     mkbench::ScaleBenchBuilder::<R>::new(ops)
         //.thread_defaults()
-        .threads(4)
-        .threads(64)
-        .threads(128)
+        .threads(1)
+        //.threads(64)
+        //.threads(128)
         //.threads(192)
         .update_batch(32)
         .log_size(32 * 1024 * 1024)
         .replica_strategy(mkbench::ReplicaStrategy::One)
-        .replica_strategy(mkbench::ReplicaStrategy::Socket)
+        //.replica_strategy(mkbench::ReplicaStrategy::Socket)
         .thread_mapping(ThreadMapping::Interleave)
         .log_strategy(mkbench::LogStrategy::One)
         .configure(
@@ -329,9 +329,9 @@ fn main() {
     let write_ratios = if cfg!(feature = "exhaustive") {
         vec![0, 10, 20, 40, 60, 80, 100]
     } else if cfg!(feature = "smokebench") {
-        vec![10]
+        vec![0, 10, 100]
     } else {
-        vec![10]
+        vec![100]
     };
 
     unsafe {

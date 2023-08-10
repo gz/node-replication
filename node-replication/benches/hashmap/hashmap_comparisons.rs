@@ -24,6 +24,7 @@ use bench_utils::mkbench::DsInterface;
 pub struct Partitioner<T: Dispatch> {
     registered: AtomicUsize,
     data_structure: UnsafeCell<T>,
+    max_replicas: usize,
 }
 
 // Ok because if more than one thread tries to register we would fail.
@@ -36,10 +37,11 @@ where
 {
     type D = T;
 
-    fn new(_replicas: NonZeroUsize, _logs: NonZeroUsize, _log_size: usize) -> std::sync::Arc<Self> {
+    fn new(replicas: NonZeroUsize, _logs: NonZeroUsize, _log_size: usize) -> std::sync::Arc<Self> {
         Arc::new(Partitioner {
             registered: AtomicUsize::new(0),
             data_structure: UnsafeCell::new(T::default()),
+            max_replicas: replicas.get(),
         })
     }
 
@@ -89,6 +91,7 @@ where
 pub struct ConcurrentDs<T: Dispatch + Sync> {
     registered: AtomicUsize,
     data_structure: T,
+    max_replicas: usize,
 }
 
 unsafe impl<T> Sync for ConcurrentDs<T> where T: Dispatch + Default + Sync {}
@@ -99,10 +102,11 @@ where
 {
     type D = T;
 
-    fn new(_replicas: NonZeroUsize, _logs: NonZeroUsize, _log_size: usize) -> std::sync::Arc<Self> {
+    fn new(replicas: NonZeroUsize, _logs: NonZeroUsize, _log_size: usize) -> std::sync::Arc<Self> {
         Arc::new(ConcurrentDs {
             registered: AtomicUsize::new(0),
             data_structure: T::default(),
+            max_replicas: replicas.get(),
         })
     }
 

@@ -783,6 +783,7 @@ where
     #[inline(always)]
     fn exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
         // Execute any operations on the shared log against this replica.
+        // TODO(gz, dynrep): This should probably be `num_registered_threads` aka context length?
         let next = self.next.load(Ordering::Relaxed);
         {
             let mut data = self.data.write(next);
@@ -821,6 +822,7 @@ where
         combiner_lock: CombinerLock<'r, D>,
     ) -> Result<(), ReplicaError<D>> {
         let num_registered_threads = contexts.clone().count();
+        //logging::error!("combine() num_registered_threads={num_registered_threads}");
         let mut results = self.result.borrow_mut();
         let mut buffer = self.buffer.borrow_mut();
         let mut operations = self.inflight.borrow_mut();

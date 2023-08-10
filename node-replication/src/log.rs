@@ -3,11 +3,7 @@
 
 //! Contains the shared Log, in a nutshell it's a multi-producer, multi-consumer
 //! circular-buffer.
-
-extern crate std;
-
-use std::collections::HashMap;
-
+use hashbrown::hash_map::HashMap;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -18,7 +14,6 @@ use core::mem::size_of;
 #[cfg(not(loom))]
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use bm::AtomicBitmap;
 use crossbeam_utils::CachePadded;
 #[cfg(loom)]
 pub use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -162,7 +157,7 @@ where
 
     /// Identifier that will be allocated to the next replica that registers with
     /// this Log. Also required to correctly index into ltails above.
-    pub replica_inventory: Box<dyn AtomicBitmap>,
+    pub replica_inventory: AtomicUsize,
 
     /// Array consisting of local alive masks for each registered replica. Required
     /// because replicas make independent progress over the log, so we need to
@@ -270,7 +265,7 @@ where
                 tail: CachePadded::new(AtomicUsize::new(0usize)),
                 ctail: CachePadded::new(AtomicUsize::new(0usize)),
                 ltails: ltails_init,
-                replica_inventory: Box::new(AtomicUsize::new(1usize)),
+                replica_inventory: AtomicUsize::new(1usize),
                 lmasks: lmask_init,
                 metadata,
             }
@@ -295,7 +290,7 @@ where
                 tail: CachePadded::new(AtomicUsize::new(0usize)),
                 ctail: CachePadded::new(AtomicUsize::new(0usize)),
                 ltails: ltails_init,
-                replica_inventory: Box::new(AtomicUsize::new(1usize)),
+                replica_inventory: AtomicUsize::new(1usize),
                 lmasks: HashMap::with_capacity(MAX_REPLICAS_PER_LOG),
                 metadata,
             }
@@ -405,15 +400,21 @@ where
     /// ```
     pub fn register(&self) -> Option<LogToken> {
         for replica_id in 0..MAX_REPLICAS_PER_LOG {
-            if !self
-                .replica_inventory
-                .load_bit(replica_id, Ordering::Relaxed)
-            {
-                self.replica_inventory
-                    .compare_and_swap(replica_id, false, true, Ordering::Relaxed);
+            let replicas = self.replica_inventory.load(Ordering::Relaxed);
+            if replicas & (1 << replica_id) == 0 {
+                assert!(self
+                    .replica_inventory
+                    .compare_exchange(
+                        replicas,
+                        replicas | 1 << replica_id,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok());
                 return Some(LogToken(replica_id));
             }
         }
+
         None
     }
 
@@ -424,16 +425,8 @@ where
     }
 
     pub(crate) fn replica_count(&self) -> usize {
-        let mut count = 0;
-        for replica_id in 0..MAX_REPLICAS_PER_LOG {
-            if self
-                .replica_inventory
-                .load_bit(replica_id, Ordering::Relaxed)
-            {
-                count += 1;
-            }
-        }
-        count
+        let replicas = self.replica_inventory.load(Ordering::Relaxed);
+        replicas.count_ones() as usize
     }
 
     /// Loops over all `ltails` and finds the replica with the lowest tail.
@@ -447,7 +440,7 @@ where
 
         // Find the smallest local tail across all replicas.
         for idx in 1..MAX_REPLICAS_PER_LOG {
-            if self.replica_inventory.get_bit(idx) {
+            if self.replica_inventory.load(Ordering::Relaxed) & (1 << idx) != 0 {
                 let cur_local_tail = self.ltails[&(idx - 1)].load(Ordering::Relaxed);
                 //info!("Replica {} cur_local_tail {}.", idx - 1, cur_local_tail);
 
@@ -486,21 +479,35 @@ where
     /// Removes log entries for associated replicas. This is to allow dynamic adding and removing
     /// of replicas for memory efficiency & performance purposes.
     pub(crate) fn remove_log_replica(&mut self, log_token: LogToken) {
-        logging::info!("remove_log_replica {}", log_token.0);
-        assert!(self.replica_inventory
-            .compare_and_swap(log_token.0, true, false, Ordering::Relaxed));
+        let replicas = self.replica_inventory.load(Ordering::Relaxed);
+        assert!(self
+            .replica_inventory
+            .compare_exchange(
+                replicas,
+                replicas & !(1 << log_token.0),
+                Ordering::Relaxed,
+                Ordering::Relaxed
+            )
+            .is_ok());
         self.ltails
             .insert(log_token.0, CachePadded::new(AtomicUsize::new(0)));
         self.lmasks
             .insert(log_token.0, CachePadded::new(Cell::new(true)));
     }
 
-    /// Add log etriesn for associated replicas. This is to allow dynamic adding and removing
+    /// Add log entries for associated replicas. This is to allow dynamic adding and removing
     /// of replicas for memory efficiency & performance purposes.
     pub(crate) fn add_log_replica(&mut self, log_token: LogToken) {
-        logging::error!("add_log_replica {}", log_token.0);
-        self.replica_inventory
-            .compare_and_swap(log_token.0, false, true, Ordering::Relaxed);
+        let replicas = self.replica_inventory.load(Ordering::Relaxed);
+        assert!(self
+            .replica_inventory
+            .compare_exchange(
+                replicas,
+                replicas | (1 << log_token.0),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok());
     }
 
     /// Resets the log. This is required for microbenchmarking the log; with
@@ -520,12 +527,7 @@ where
         // First, reset global metadata.
         self.head.store(0, Ordering::SeqCst);
         self.tail.store(0, Ordering::SeqCst);
-        for i in 0..MAX_REPLICAS_PER_LOG {
-            self.replica_inventory
-                .compare_and_swap(i, true, false, Ordering::Relaxed);
-        }
-        self.replica_inventory
-            .compare_and_swap(0, false, true, Ordering::Relaxed);
+        self.replica_inventory.store(1, Ordering::Relaxed);
 
         // Next, reset replica-local metadata.
         for r in 0..MAX_REPLICAS_PER_LOG {
@@ -777,11 +779,7 @@ mod tests {
     fn test_find_min_tail_gets_lowest() {
         let l = Log::<Operation, (), ()>::default();
         let _lt = l.register().unwrap();
-
-        for i in 0..4 {
-            l.replica_inventory
-                .compare_and_swap(i, false, true, Ordering::Relaxed);
-        }
+        l.replica_inventory.store(0b1111, Ordering::Relaxed);
 
         l.ltails[&0].store(1023, Ordering::Relaxed);
         l.ltails[&1].store(224, Ordering::Relaxed);

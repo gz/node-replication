@@ -11,8 +11,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use node_replication::nr::Dispatch;
-use node_replication::nr::NodeReplicated;
+use nr2::nr::Dispatch;
+use nr2::nr::NodeReplicated;
 
 /// The node-replicated hashmap uses a std hashmap internally.
 #[derive(Default, Clone)]

@@ -60,7 +60,7 @@ fn main() {
     // Setup logging and some constants.
     let _r = env_logger::try_init();
 
-    const NUM_THREADS: usize = 8;
+    const NUM_THREADS: usize = 1;
 
     // We start with 4 replicas.
     let initial_replicas: NonZeroUsize = NonZeroUsize::new(4).unwrap();

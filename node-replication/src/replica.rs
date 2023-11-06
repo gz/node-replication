@@ -11,7 +11,7 @@ use static_assertions::const_assert;
 /// [`crate::nr::Replica::register()`] or [`crate::cnr::Replica::register()`]
 /// function will start to return None.
 #[cfg(not(loom))]
-pub const MAX_THREADS_PER_REPLICA: usize = 16;
+pub const MAX_THREADS_PER_REPLICA: usize = 32;
 #[cfg(loom)]
 pub const MAX_THREADS_PER_REPLICA: usize = 2;
 // MAX_THREADS_PER_REPLICA must be a power of two

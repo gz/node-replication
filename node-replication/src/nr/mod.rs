@@ -474,7 +474,7 @@ where
             Replica::new(log_token.clone())
             // aff_tkn is dropped here
         };
-        logging::info!("Adding replica {replica_id}");
+        logging::debug!("Adding replica {replica_id}");
         if self.replicas.contains_key(&replica_id) {
             return Err(NodeReplicatedError::DuplicateReplica);
         }
@@ -495,7 +495,7 @@ where
         // find and push existing lmask entry for new replica
         let lmask_status = self.log.lmasks[&max_replica_idx].get();
         self.log.lmasks[&replica_id].set(lmask_status);
-        logging::info!(
+        logging::debug!(
             "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks[&replica_id] {:?}",
             self.log.lmasks[&replica_id].get()
         );
@@ -511,7 +511,8 @@ where
         self.log.remove_log_replica(log::LogToken(replica_id + 1));
 
         if self.replicas.contains_key(&replica_id) {
-            self.replicas.remove(&replica_id);
+            let r =self.replicas.remove(&replica_id);
+            core::mem::forget(r); // XXX: leak the replica until we fixed all problems with PT access
         } else {
             return Err(NodeReplicatedError::UnableToRemoveReplica);
         }
@@ -580,6 +581,7 @@ where
         if self.replicas.len() < MAX_REPLICAS_PER_LOG {
             let rtkn = self.replicas[&replica_id].register()?;
             let ttkn = ThreadToken::new(replica_id, rtkn);
+            logging::trace!("rid {replica_id} rtkn {rtkn:?} ttkn {ttkn:?} gtid = {}", ttkn.gtid());
             self.thread_routing[replica_id].set_bit(ttkn.gtid());
 
             Some(ttkn)

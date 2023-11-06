@@ -47,7 +47,7 @@ const_assert!(DEFAULT_LOG_BYTES.is_power_of_two());
 /// our system Can't make it arbitrarily high as it will lead to more memory
 /// overheads / bigger structs.
 #[cfg(not(loom))]
-pub const MAX_REPLICAS_PER_LOG: usize = 9;
+pub const MAX_REPLICAS_PER_LOG: usize = 5;
 #[cfg(loom)] // Otherwise uses too much stack space wich crashes in loom...
 pub const MAX_REPLICAS_PER_LOG: usize = 3;
 

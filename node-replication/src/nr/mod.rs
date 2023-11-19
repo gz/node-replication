@@ -665,6 +665,7 @@ where
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
         //logging::info!("execute mut on {:?}", tkn);
+        let _aftkn = self.affinity_mngr.switch(tkn.rid);
         while !self.make_pending(op.clone(), tkn.gtid()) {}
 
         /// An enum to keep track of a stack of operations we should do on Replicas.

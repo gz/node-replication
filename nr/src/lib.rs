@@ -42,12 +42,12 @@
 //! /// and `WriteOperation` (our Modify enum) against the replicated
 //! /// data-structure.
 //! impl Dispatch for NrHashMap {
-//!    type ReadOperation = Access;
+//!    type ReadOperation<'a> = Access;
 //!    type WriteOperation = Modify;
 //!    type Response = Option<u64>;
 //!
 //!    /// The `dispatch` function applies the immutable operations.
-//!    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+//!    fn dispatch<'a>(&self, op: Self::ReadOperation<'a>) -> Self::Response {
 //!        match op {
 //!            Access::Get(key) => self.storage.get(&key).map(|v| *v),
 //!        }

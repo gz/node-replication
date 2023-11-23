@@ -74,11 +74,11 @@ impl Default for Stack {
 }
 
 impl Dispatch for Stack {
-    type ReadOperation = OpRd;
+    type ReadOperation<'a> = OpRd;
     type WriteOperation = OpWr;
     type Response = Option<u32>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'a>(&self, op: Self::ReadOperation<'a>) -> Self::Response {
         match op {
             OpRd::Peek => self.peek(),
         }
@@ -200,11 +200,11 @@ impl Default for VerifyStack {
 }
 
 impl Dispatch for VerifyStack {
-    type ReadOperation = OpRd;
+    type ReadOperation<'a> = OpRd;
     type WriteOperation = OpWr;
     type Response = Option<u32>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'a>(&self, op: Self::ReadOperation<'a>) -> Self::Response {
         match op {
             OpRd::Peek => {
                 let ele: u32 = self.peek();

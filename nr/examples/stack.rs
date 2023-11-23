@@ -51,12 +51,12 @@ impl Default for Stack {
 /// and `WriteOperation` (our `Modify` enum) against the replicated
 /// data-structure.
 impl Dispatch for Stack {
-    type ReadOperation = Access;
+    type ReadOperation<'a> = Access;
     type WriteOperation = Modify;
     type Response = Option<u32>;
 
     /// The `dispatch` function applies the immutable operations.
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'a>(&self, op: Self::ReadOperation<'a>) -> Self::Response {
         match op {
             Access::Peek => self.storage.last().cloned(),
         }

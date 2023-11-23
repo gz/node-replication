@@ -153,14 +153,14 @@ where
     ///
     /// // This trait allows the `Data` to be used with node-replication.
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
+    ///     type ReadOperation<'a> = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
     ///
     ///     // A read returns the underlying u64.
-    ///     fn dispatch(
+    ///     fn dispatch<'a>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'a>,
     ///     ) -> Self::Response {
     ///         Some(self.junk)
     ///     }
@@ -270,13 +270,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
+    ///     type ReadOperation<'a> = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'a>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'a>,
     ///     ) -> Self::Response {
     ///         Some(self.junk)
     ///     }
@@ -336,13 +336,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
+    ///     type ReadOperation<'a> = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'a>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'a>,
     ///     ) -> Self::Response {
     ///         Some(self.junk)
     ///     }
@@ -394,13 +394,13 @@ where
     /// }
     ///
     /// impl Dispatch for Data {
-    ///     type ReadOperation = ();
+    ///     type ReadOperation<'a> = ();
     ///     type WriteOperation = u64;
     ///     type Response = Option<u64>;
     ///
-    ///     fn dispatch(
+    ///     fn dispatch<'a>(
     ///         &self,
-    ///         _op: Self::ReadOperation,
+    ///         _op: Self::ReadOperation<'a>,
     ///     ) -> Self::Response {
     ///         Some(self.junk)
     ///     }
@@ -630,11 +630,11 @@ mod test {
     }
 
     impl Dispatch for Data {
-        type ReadOperation = u64;
+        type ReadOperation<'a> = u64;
         type WriteOperation = u64;
         type Response = Result<u64, ()>;
 
-        fn dispatch(&self, _op: Self::ReadOperation) -> Self::Response {
+        fn dispatch(&self, _op: Self::ReadOperation<'_>) -> Self::Response {
             Ok(self.junk)
         }
 

@@ -470,7 +470,7 @@ where
         let log_token = log::LogToken(replica_id + 1);
         let r = {
             // Allocate the replica on the proper NUMA node
-            let _aff_tkn = self.affinity_mngr.switch(self.replicas.len());
+            let _aff_tkn = self.affinity_mngr.switch(replica_id);
             Replica::new(log_token.clone())
             // aff_tkn is dropped here
         };
@@ -596,6 +596,7 @@ where
         cl: Option<CombinerLock<'a, D>>,
     ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         let rid = self.select_replica(tkn);
+        //logging::info!("try_execute_mut selected replica {} from tkn {:?}", rid, tkn);
         let contexts = self.context_iterator(rid);
 
         if let Some(combiner_lock) = cl {

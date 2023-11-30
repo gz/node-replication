@@ -465,11 +465,12 @@ where
 
         // Find the local tail across all replicas.
         for idx in 1..MAX_REPLICAS_PER_LOG {
-            let cur_local_tail = self.ltails[&(idx - 1)].load(Ordering::Relaxed);
-
-            if cur_local_tail > max_local_tail {
-                max_local_tail = cur_local_tail;
-                max_replica_idx = idx - 1;
+            if self.replica_inventory.load(Ordering::Relaxed) & (1 << idx) != 0 {
+                let cur_local_tail = self.ltails[&(idx - 1)].load(Ordering::Relaxed);
+                if cur_local_tail > max_local_tail {
+                    max_local_tail = cur_local_tail;
+                    max_replica_idx = idx - 1;
+                }
             }
         }
 
@@ -479,6 +480,7 @@ where
     /// Removes log entries for associated replicas. This is to allow dynamic adding and removing
     /// of replicas for memory efficiency & performance purposes.
     pub(crate) fn remove_log_replica(&mut self, log_token: LogToken) {
+        //logging::info!("Removing replica {} from log.", log_token.0);
         let replicas = self.replica_inventory.load(Ordering::Relaxed);
         assert!(self
             .replica_inventory
@@ -489,15 +491,18 @@ where
                 Ordering::Relaxed
             )
             .is_ok());
-        self.ltails
-            .insert(log_token.0, CachePadded::new(AtomicUsize::new(0)));
-        self.lmasks
-            .insert(log_token.0, CachePadded::new(Cell::new(true)));
+        //self.ltails
+        //    .insert(log_token.0, CachePadded::new(AtomicUsize::new(0)));
+        //self.lmasks
+        //    .insert(log_token.0, CachePadded::new(Cell::new(true)));
+        //logging::info!("self.ltails: {:?}", self.ltails);
+        //logging::info!("self.lmasks: {:?}", self.ltails);
     }
 
     /// Add log entries for associated replicas. This is to allow dynamic adding and removing
     /// of replicas for memory efficiency & performance purposes.
     pub(crate) fn add_log_replica(&mut self, log_token: LogToken) {
+        //logging::info!("Adding replica {} to log.", log_token.0);
         let replicas = self.replica_inventory.load(Ordering::Relaxed);
         assert!(self
             .replica_inventory

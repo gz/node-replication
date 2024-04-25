@@ -3,9 +3,9 @@
 
 //! Contains the shared Log, in a nutshell it's a multi-producer, multi-consumer
 //! circular-buffer.
-use hashbrown::hash_map::HashMap;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use hashbrown::hash_map::HashMap;
 
 use core::cell::Cell;
 use core::default::Default;

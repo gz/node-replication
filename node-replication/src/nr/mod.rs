@@ -511,7 +511,7 @@ where
         self.log.remove_log_replica(log::LogToken(replica_id + 1));
 
         if self.replicas.contains_key(&replica_id) {
-            let r =self.replicas.remove(&replica_id);
+            let r = self.replicas.remove(&replica_id);
             core::mem::forget(r); // XXX: leak the replica until we fixed all problems with PT access
         } else {
             return Err(NodeReplicatedError::UnableToRemoveReplica);
@@ -581,7 +581,10 @@ where
         if self.replicas.len() < MAX_REPLICAS_PER_LOG {
             let rtkn = self.replicas[&replica_id].register()?;
             let ttkn = ThreadToken::new(replica_id, rtkn);
-            logging::trace!("rid {replica_id} rtkn {rtkn:?} ttkn {ttkn:?} gtid = {}", ttkn.gtid());
+            logging::trace!(
+                "rid {replica_id} rtkn {rtkn:?} ttkn {ttkn:?} gtid = {}",
+                ttkn.gtid()
+            );
             self.thread_routing[replica_id].set_bit(ttkn.gtid());
 
             Some(ttkn)

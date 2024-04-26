@@ -10,7 +10,9 @@ use std::num::NonZeroUsize;
 
 use futures::future::join_all;
 
-use nr2::nr::reusable_box::ReusableBoxFuture;
+#[cfg(feature = "async")]
+use crate::reusable_box::ReusableBoxFuture;
+
 use nr2::nr::Dispatch;
 use nr2::nr::NodeReplicated;
 

@@ -17,8 +17,8 @@ pub(crate) type Context<T, R> = crate::context::Context<T, R, PendingMetaData>;
 #[cfg(test)]
 mod test {
     use super::*;
-    use core::sync::atomic::Ordering;
     use crate::context::MAX_PENDING_OPS;
+    use core::sync::atomic::Ordering;
 
     // test context for retrieving non-scan ops.
     #[test]

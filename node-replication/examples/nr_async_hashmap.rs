@@ -69,6 +69,7 @@ impl Dispatch for NrHashMap {
     }
 }
 
+#[cfg(feature = "async")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let replicas = NonZeroUsize::new(1).unwrap();

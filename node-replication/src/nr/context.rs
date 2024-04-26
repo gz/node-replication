@@ -3,8 +3,6 @@
 
 //! NR specific Context.
 
-pub use crate::context::MAX_PENDING_OPS;
-
 /// The NR per-thread context.
 ///
 /// It stores every outstanding request (`T`) and response (`R`) pair.

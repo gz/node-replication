@@ -26,7 +26,7 @@ pub use crate::replica::MAX_THREADS_PER_REPLICA;
 type OperationState<D> = (<D as Dispatch>::WriteOperation, usize, bool);
 
 /// An instance of per log state maintained by each replica.
-pub(self) struct LogState<D>
+struct LogState<D>
 where
     D: Sized + Dispatch + Sync,
 {

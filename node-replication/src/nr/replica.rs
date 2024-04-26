@@ -763,8 +763,8 @@ where
 
     /// Appends an operation to the log and attempts to perform flat combining.
     /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
-    pub(crate) fn try_combine<'r>(
-        &'r self,
+    pub(crate) fn try_combine(
+        &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
     ) -> Result<(), ReplicaError<D>> {

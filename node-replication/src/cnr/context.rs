@@ -3,8 +3,6 @@
 
 //! CNR specific Context.
 
-pub use crate::context::MAX_PENDING_OPS;
-
 /// Pending operation meta-data for CNR.
 ///
 /// Tuple contains: `hash`, `is_scan`, `is_read_only`

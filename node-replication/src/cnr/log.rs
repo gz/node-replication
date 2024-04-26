@@ -13,7 +13,6 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crossbeam_utils::CachePadded;
 
-pub use crate::log::DEFAULT_LOG_BYTES;
 pub use crate::log::MAX_REPLICAS_PER_LOG;
 
 pub use crate::log::LogToken;

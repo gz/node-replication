@@ -9,10 +9,10 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use node_replication::nr::Dispatch;
-use node_replication::nr::NodeReplicated;
-use node_replication::nr::NodeReplicatedError;
-use node_replication::nr::ThreadToken;
+use nr2::nr::Dispatch;
+use nr2::nr::NodeReplicated;
+use nr2::nr::NodeReplicatedError;
+use nr2::nr::ThreadToken;
 
 /// We support mutable push and pop operations on the stack.
 #[derive(Clone, Debug, PartialEq)]

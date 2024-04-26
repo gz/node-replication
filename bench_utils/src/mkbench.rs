@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use csv::WriterBuilder;
 use log::*;
 
-use node_replication::nr::{AffinityChange, Dispatch, NodeReplicated, ReplicaId, ThreadToken};
+use nr2::nr::{AffinityChange, Dispatch, NodeReplicated, ReplicaId, ThreadToken};
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::Serialize;
@@ -167,7 +167,7 @@ impl<'a, T: Dispatch + Sync + Default + Clone> DsInterface for NodeReplicated<T>
         _op: <Self::D as Dispatch>::WriteOperation,
         _idx: ThreadToken,
     ) -> <Self::D as Dispatch>::Response {
-        unreachable!("scan-ops are non-sensical for node_replication::NodeReplicated<T>")
+        unreachable!("scan-ops are non-sensical for nr2::NodeReplicated<T>")
     }
 
     fn execute(
@@ -870,7 +870,7 @@ where
             log_strategies: Vec::new(),
             thread_mappings: Vec::new(),
             threads: Vec::new(),
-            log_size: node_replication::log::DEFAULT_LOG_BYTES,
+            log_size: nr2::log::DEFAULT_LOG_BYTES,
             batches: vec![1usize],
             operations: ops,
             _marker: PhantomData,

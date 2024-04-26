@@ -20,7 +20,7 @@ use loom::sync::atomic::{AtomicBool, Ordering};
 use loom::sync::Arc;
 use loom::thread;
 
-use node_replication::nr::{Dispatch, Log, LogToken, Replica};
+use nr2::nr::{Dispatch, Log, LogToken, Replica};
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 enum OpWr {

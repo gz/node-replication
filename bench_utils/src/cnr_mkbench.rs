@@ -30,11 +30,9 @@ use rand::{rngs::SmallRng, Rng, SeedableRng};
 use serde::Serialize;
 use tokio::runtime::Runtime;
 
-use node_replication::cnr::{
-    Dispatch, Log, LogMetaData, Replica, ReplicaToken, MAX_REPLICAS_PER_LOG,
-};
+use nr2::cnr::{Dispatch, Log, LogMetaData, Replica, ReplicaToken, MAX_REPLICAS_PER_LOG};
 #[cfg(feature = "async")]
-use node_replication::nr::reusable_box::ReusableBoxFuture;
+use nr2::nr::reusable_box::ReusableBoxFuture;
 
 use crate::benchmark::*;
 pub use crate::topology::ThreadMapping;

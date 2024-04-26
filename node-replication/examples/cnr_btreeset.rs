@@ -8,7 +8,7 @@ use crossbeam_skiplist::SkipSet;
 
 use std::sync::Arc;
 
-use node_replication::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica};
+use nr2::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica};
 
 #[derive(Default)]
 struct CnrBtreeSet {

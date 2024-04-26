@@ -12,7 +12,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::usize;
 
-use node_replication::nr::{Dispatch, Log, Replica};
+use nr2::nr::{Dispatch, Log, Replica};
 
 use rand::{thread_rng, Rng};
 

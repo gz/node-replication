@@ -9,11 +9,11 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use chashmap::CHashMap;
-use node_replication::cnr::Dispatch;
-use node_replication::cnr::Log;
-use node_replication::cnr::LogMapper;
-use node_replication::cnr::LogMetaData;
-use node_replication::cnr::Replica;
+use nr2::cnr::Dispatch;
+use nr2::cnr::Log;
+use nr2::cnr::LogMapper;
+use nr2::cnr::LogMetaData;
+use nr2::cnr::Replica;
 
 /// Maximum size of the hashmap.
 const CAPACITY: usize = 100_000;

@@ -6,7 +6,7 @@
 use crossbeam_queue::SegQueue;
 use std::sync::Arc;
 
-use node_replication::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica};
+use nr2::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica};
 
 /// We support mutable push and pop operations on the stack.
 #[derive(Clone, Debug, PartialEq)]

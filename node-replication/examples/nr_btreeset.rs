@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use node_replication::nr::Dispatch;
-use node_replication::nr::NodeReplicated;
+use nr2::nr::Dispatch;
+use nr2::nr::NodeReplicated;
 
 #[derive(Default, Clone)]
 struct NrBtreeSet {

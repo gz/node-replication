@@ -925,13 +925,13 @@ pub(crate) mod test {
         let lt = slog.register().unwrap();
         let repl = Replica::<Data>::new(lt);
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
-        assert_eq!(repl.next.load(Ordering::SeqCst), 1);
+        assert_eq!(repl.next.load(Ordering::SeqCst), 0);
         //assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
         assert_eq!(
             repl.buffer.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
         );
-        assert_eq!(repl.inflight.borrow().len(), MAX_THREADS_PER_REPLICA);
+        assert_eq!(repl.inflight.borrow().len(), MAX_THREADS_PER_INSTANCE);
         assert_eq!(
             repl.result.borrow().capacity(),
             MAX_THREADS_PER_REPLICA * Context::<u64, Result<u64, ()>>::batch_size()
@@ -945,8 +945,8 @@ pub(crate) mod test {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
         let lt = slog.register().unwrap();
         let repl = Replica::<Data>::new(lt);
-        assert_eq!(repl.register(), Some(ReplicaToken(1)));
-        assert_eq!(repl.next.load(Ordering::SeqCst), 2);
+        assert_eq!(repl.register(), Some(ReplicaToken(0)));
+        assert_eq!(repl.next.load(Ordering::SeqCst), 1);
         repl.next.store(17, Ordering::SeqCst);
         assert_eq!(repl.register(), Some(ReplicaToken(17)));
         assert_eq!(repl.next.load(Ordering::SeqCst), 18);

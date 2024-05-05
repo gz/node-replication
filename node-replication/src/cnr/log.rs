@@ -620,8 +620,11 @@ mod tests {
         let tkn = l.register().unwrap();
 
         for i in 0..4 {
-            l.replica_inventory
-                .compare_and_swap(i, false, true, Ordering::Relaxed);
+            // set each bit (i) to 1, and check it was previously false
+            assert_eq!(
+                l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
+                0
+            );
         }
 
         l.ltails[&0].store(1023, Ordering::Relaxed);
@@ -681,8 +684,10 @@ mod tests {
         };
 
         for i in 0..5 {
-            l.replica_inventory
-                .compare_and_swap(i, false, true, Ordering::Relaxed);
+            assert_eq!(
+                l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
+                0
+            );
         }
 
         l.head.store(2 * 8192, Ordering::Relaxed);

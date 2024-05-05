@@ -1099,9 +1099,9 @@ mod test {
         let replicas = NonZeroUsize::new(1).unwrap();
         let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
         assert_eq!(async_ds.replicas.len(), 1);
-        let _ = async_ds.add_replica();
+        let _ = async_ds.add_replica(1);
         assert_eq!(async_ds.replicas.len(), 2);
-        let _ = async_ds.add_replica();
+        let _ = async_ds.add_replica(2);
         assert_eq!(async_ds.replicas.len(), 3);
     }
 
@@ -1110,8 +1110,8 @@ mod test {
     fn test_add_replica_does_not_exceed_max_replicas() {
         let replicas = NonZeroUsize::new(1).unwrap();
         let mut ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
-        for _ in 0..MAX_REPLICAS_PER_LOG {
-            let _ = ds.add_replica();
+        for i in 0..MAX_REPLICAS_PER_LOG {
+            let _ = ds.add_replica(i);
         }
     }
 

@@ -809,7 +809,11 @@ mod tests {
         log.remove_log_replica(chosen_one);
 
         // replica inventory to be false for the deleted entry
-        assert_eq!(log.replica_inventory.get_bit(*log_token), false);
+        assert_eq!(
+            log.replica_inventory
+                .fetch_and(1 << (*log_token), Ordering::Relaxed),
+            0
+        );
 
         // ltails to be zerod out
         assert_eq!(log.ltails[log_token].load(Ordering::Relaxed), 0);

@@ -105,3 +105,8 @@ async fn main() {
         assert_eq!(*item, i + 1);
     }
 }
+
+#[cfg(not(feature = "async"))]
+fn main() {
+    println!("TODO: dummy function");
+}

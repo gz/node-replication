@@ -401,8 +401,10 @@ mod tests {
         let lt = l.register().unwrap();
 
         for i in 0..3 {
-            l.replica_inventory
-                .compare_and_swap(i, false, true, Ordering::Relaxed);
+            assert_eq!(
+                l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
+                0
+            );
         }
 
         l.ltails[&0].store(1023, Ordering::Relaxed);
@@ -431,8 +433,10 @@ mod tests {
         };
 
         for i in 0..2 {
-            l.replica_inventory
-                .compare_and_swap(i, false, true, Ordering::Relaxed);
+            assert_eq!(
+                l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
+                0
+            );
         }
 
         l.tail
@@ -463,8 +467,10 @@ mod tests {
         };
 
         for i in 0..5 {
-            l.replica_inventory
-                .compare_and_swap(i, false, true, Ordering::Relaxed);
+            assert_eq!(
+                l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
+                0
+            );
         }
         l.head.store(2 * 8192, Ordering::Relaxed);
         l.tail.store(l.slog.len() - 10, Ordering::Relaxed);
@@ -582,8 +588,11 @@ mod tests {
         assert!(l.append(&o, &lt, |_o: Operation, _mine| {}).is_ok()); // Required for GC to work correctly.
 
         for i in 0..2 {
-            l.replica_inventory
-                .compare_and_swap(i, false, true, Ordering::Relaxed);
+            // set each i to 1, check was previously 0
+            assert_eq!(
+                l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
+                0
+            );
         }
 
         l.head.store(2 * 8192, Ordering::SeqCst);

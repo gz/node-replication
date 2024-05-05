@@ -15,7 +15,7 @@ use std::time;
 use bench_utils::{pin_thread, topology::*};
 use chashmap::CHashMap as HashMap;
 use clap::{crate_version, value_t, App, Arg};
-use node_replication::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica, ReplicaToken};
+use nr2::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica, ReplicaToken};
 use rand::distributions::Distribution;
 use rand::RngCore;
 

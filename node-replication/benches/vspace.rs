@@ -13,8 +13,8 @@ use std::pin::Pin;
 use bench_utils::benchmark::*;
 use bench_utils::{mkbench, Operation};
 use logging::{debug, trace};
-use node_replication::nr::Dispatch;
-use node_replication::nr::NodeReplicated;
+use nr2::nr::Dispatch;
+use nr2::nr::NodeReplicated;
 use rand::{thread_rng, Rng};
 use x86::bits64::paging::*;
 

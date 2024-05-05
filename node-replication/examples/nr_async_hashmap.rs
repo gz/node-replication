@@ -3,17 +3,21 @@
 
 //! A minimal example that implements a replicated hashmap and inserts and reads
 //! from it using async functions.
-#![feature(generic_associated_types)]
 
 use std::collections::HashMap;
+
+#[cfg(feature = "async")]
 use std::num::NonZeroUsize;
 
+#[cfg(feature = "async")]
 use futures::future::join_all;
 
 #[cfg(feature = "async")]
 use crate::reusable_box::ReusableBoxFuture;
 
 use nr2::nr::Dispatch;
+
+#[cfg(feature = "async")]
 use nr2::nr::NodeReplicated;
 
 const CAPACITY: usize = 32;
@@ -37,12 +41,14 @@ impl Default for NrHashMap {
 /// We support mutable put operation on the hashmap.
 #[derive(Clone, Debug, PartialEq)]
 enum Modify {
+    #[allow(dead_code)]
     Put(usize, usize),
 }
 
 /// We support an immutable read operation to lookup a key from the hashmap.
 #[derive(Clone, Debug, PartialEq)]
 enum Access {
+    #[allow(dead_code)]
     Get(usize),
 }
 

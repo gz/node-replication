@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that implements a node-replicated, generic stack
-#![feature(generic_associated_types, const_option)]
+#![feature(const_option)]
 
 use std::cmp::PartialEq;
 use std::num::NonZeroUsize;

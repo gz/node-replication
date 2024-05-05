@@ -12,7 +12,7 @@ use crossbeam::epoch;
 use crossbeam_queue::SegQueue;
 use crossbeam_skiplist::SkipList;
 
-use node_replication::nr::{Dispatch, Log, ReplicaToken};
+use nr2::nr::{Dispatch, Log, ReplicaToken};
 
 use bench_utils::mkbench::DsInterface;
 

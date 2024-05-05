@@ -10,7 +10,6 @@
 //!
 //! This loom test is supposed to verify that this can't happen.
 //! See also: https://github.com/tokio-rs/loom
-#![feature(generic_associated_types)]
 #![cfg(loom)]
 
 // Run with:

@@ -1,7 +1,5 @@
 // Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-
-#![feature(generic_associated_types)]
 #![feature(is_sorted)]
 
 use std::cell::RefCell;

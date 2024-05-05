@@ -18,7 +18,7 @@ use bench_utils::benchmark::*;
 use bench_utils::mkbench::{self, DsInterface};
 use bench_utils::topology::ThreadMapping;
 use bench_utils::Operation;
-use node_replication::nr::{Dispatch, NodeReplicated};
+use nr2::nr::{Dispatch, NodeReplicated};
 
 mod hashmap_comparisons;
 

@@ -12,7 +12,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use node_replication::nr::{replica::ReplicaId, replica::ReplicaToken, Dispatch, ThreadToken};
+use nr2::nr::{replica::ReplicaId, replica::ReplicaToken, Dispatch, ThreadToken};
 use urcu_sys;
 
 use super::{OpConcurrent, INITIAL_CAPACITY};

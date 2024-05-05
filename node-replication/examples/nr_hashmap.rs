@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! An example that implements a replicated hashmap.
-#![feature(generic_associated_types)]
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;

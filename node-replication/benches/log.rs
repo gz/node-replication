@@ -3,16 +3,15 @@
 
 //! Defines all default criterion benchmarks we run.
 #![allow(unused)]
-#![feature(generic_associated_types)]
 
 use std::sync::Arc;
 
 use bench_utils::benchmark::TestHarness;
 use bench_utils::mkbench::{self, ReplicaStrategy, ThreadMapping};
 use bench_utils::Operation;
-use node_replication::nr::log::Log;
-use node_replication::nr::replica::Replica;
-use node_replication::nr::{Dispatch, NodeReplicated};
+use nr2::nr::log::Log;
+use nr2::nr::replica::Replica;
+use nr2::nr::{Dispatch, NodeReplicated};
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
 use zipf::ZipfDistribution;

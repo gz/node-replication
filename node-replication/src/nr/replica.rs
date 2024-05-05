@@ -467,7 +467,7 @@ where
     /// // let res = replica.execute_mut(&log, 100, thrtkn);
     /// // assert_eq!(None, res.unwrap());
     /// ```
-    pub fn execute_mut(
+    pub(crate) fn execute_mut(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
@@ -895,9 +895,7 @@ where
 #[cfg(test)]
 pub(crate) mod test {
     extern crate std;
-
     use super::*;
-    use std::vec;
 
     // Really dumb data structure to test against the Replica and shared log.
     #[derive(Default, Clone)]

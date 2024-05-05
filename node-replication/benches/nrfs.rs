@@ -8,7 +8,7 @@ use bench_utils::Operation;
 use nrfs::*;
 use std::cell::UnsafeCell;
 
-use node_replication::cnr::{Dispatch, LogMapper, Replica};
+use nr2::cnr::{Dispatch, LogMapper, Replica};
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpRd {

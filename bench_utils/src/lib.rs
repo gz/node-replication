@@ -3,7 +3,6 @@
 
 //! Helper code for benchmarks.
 
-#![feature(bench_black_box)]
 #![feature(get_mut_unchecked)]
 
 use std::fmt::Debug;

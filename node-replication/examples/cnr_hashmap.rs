@@ -1,6 +1,5 @@
 // Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-#![feature(generic_associated_types)]
 
 //! A minimal example that implements a replicated hashmap
 use chashmap::CHashMap as HashMap;

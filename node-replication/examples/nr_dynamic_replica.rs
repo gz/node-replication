@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! An example that dynamically varies the amount of replicas over time.
-#![feature(generic_associated_types)]
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;

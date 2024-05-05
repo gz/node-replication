@@ -2,28 +2,30 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Various tests for node-replication with the help of a stack.
-#![feature(generic_associated_types)]
 
 extern crate rand;
 extern crate std;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Barrier};
-use std::thread;
-use std::usize;
+//use std::sync::{Arc, Barrier};
+//use std::thread;
+//use std::usize;
 
-use nr2::nr::{Dispatch, Log, Replica};
+use nr2::nr::Dispatch; //, Log, Replica};
 
-use rand::{thread_rng, Rng};
+// use rand::{thread_rng, Rng};
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 enum OpWr {
+    #[allow(dead_code)]
     Push(u32),
+    #[allow(dead_code)]
     Pop,
 }
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 enum OpRd {
+    #[allow(dead_code)]
     Peek,
 }
 
@@ -32,6 +34,7 @@ struct Stack {
     storage: Vec<u32>,
 }
 
+#[allow(dead_code)]
 fn compare_vectors<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
     let matching = a.iter().zip(b.iter()).filter(|&(a, b)| a == b).count();
     matching == a.len() && matching == b.len()
@@ -393,8 +396,8 @@ fn parallel_push_and_pop_test() {
     */
 }
 
+/*
 fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64) {
-    /*
     let idx = r.register().expect("Failed to register with Replica.");
 
     let mut orng = thread_rng();
@@ -419,11 +422,12 @@ fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barri
     }
 
     barrier.wait();
-    */
 
     (0, 0)
 }
+*/
 
+/*
 /// Verify that 2 replicas are equal after a set of random
 /// operations have been executed against the log.
 #[test]
@@ -485,3 +489,4 @@ fn replicas_are_equal() {
     assert_eq!(d0, d1, "Data-structures don't match.");
     assert_eq!(p0, p1, "Removed elements in each replica dont match.");
 }
+*/

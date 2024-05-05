@@ -13,8 +13,8 @@
 use bench_utils::benchmark::*;
 use bench_utils::{mkbench, Operation};
 use crossbeam_utils::CachePadded;
-use node_replication::nr::Dispatch;
-use node_replication::nr::NodeReplicated;
+use nr2::nr::Dispatch;
+use nr2::nr::NodeReplicated;
 use rand::{thread_rng, Rng};
 
 /// Operations we can perform on the AbstractDataStructure.

@@ -13,8 +13,6 @@
     get_mut_unchecked,
     negative_impls,
     allocator_api,
-    generic_associated_types,
-    nonnull_slice_from_raw_parts,
     doc_auto_cfg,
     core_intrinsics
 )]

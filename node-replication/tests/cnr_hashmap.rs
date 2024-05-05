@@ -1,5 +1,3 @@
-#![feature(generic_associated_types)]
-
 use chashmap::CHashMap;
 
 use nr2::cnr::Dispatch;

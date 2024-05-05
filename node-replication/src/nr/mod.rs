@@ -1020,7 +1020,7 @@ mod test {
 
     #[test]
     fn select_correct_replica() {
-        env_logger::try_init();
+        let _ = env_logger::try_init();
 
         fn mkttkn(rid: usize, tid: usize) -> ThreadToken {
             ThreadToken {
@@ -1113,7 +1113,7 @@ mod test {
         for i in 0..MAX_REPLICAS_PER_LOG {
             let _ = ds.add_replica(i);
         }
-        ds.add_replica(MAX_REPLICAS_PER_LOG);
+        let _ = ds.add_replica(MAX_REPLICAS_PER_LOG);
     }
 
     /*

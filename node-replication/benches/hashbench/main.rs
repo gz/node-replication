@@ -17,7 +17,7 @@ use std::time;
 
 use chashmap::CHashMap;
 use clap::{crate_version, value_t, App, Arg};
-use node_replication::nr::{replica::ReplicaId, Dispatch, NodeReplicated, ThreadToken};
+use nr2::nr::{replica::ReplicaId, Dispatch, NodeReplicated, ThreadToken};
 use rand::distributions::Distribution;
 use rand::RngCore;
 use urcu_sys;

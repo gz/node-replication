@@ -94,7 +94,6 @@
 //!    }
 //! }
 //! ```
-
 mod context;
 mod log;
 mod replica;

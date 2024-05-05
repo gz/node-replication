@@ -14,7 +14,7 @@ use bench_utils::benchmark::*;
 use bench_utils::cnr_mkbench::{self, ReplicaTrait};
 use bench_utils::topology::{MachineTopology, ThreadMapping};
 use bench_utils::Operation;
-use node_replication::cnr::{Dispatch, LogMapper, Replica};
+use nr2::cnr::{Dispatch, LogMapper, Replica};
 use rand::seq::SliceRandom;
 use rand::{Rng, RngCore};
 

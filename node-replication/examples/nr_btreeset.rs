@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! A minimal example that impements a replicated BTreeSet.
-#![feature(generic_associated_types)]
 
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;

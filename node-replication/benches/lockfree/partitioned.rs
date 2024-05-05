@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crossbeam_skiplist::SkipMap;
 
 use crate::cnr_mkbench::ReplicaTrait;
-use node_replication::cnr::{Dispatch, Log, ReplicaToken};
+use nr2::cnr::{Dispatch, Log, ReplicaToken};
 
 use super::{OpWr, SkipListConcurrent, INITIAL_CAPACITY};
 

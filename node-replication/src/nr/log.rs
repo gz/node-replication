@@ -25,7 +25,7 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::log::Log;
+    /// use nr2::log::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -200,7 +200,7 @@ where
     /// (Example ignored for lack of access to `exec` in doctests.)
     ///
     /// ```ignore
-    /// use node_replication::nr::Log;
+    /// use nr2::nr::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -400,7 +400,7 @@ mod tests {
         let l = Log::<Operation>::default();
         let lt = l.register().unwrap();
 
-        for i in 0..3 {
+        for i in 2..3 {
             assert_eq!(
                 l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
                 0
@@ -432,13 +432,6 @@ mod tests {
             a
         };
 
-        for i in 0..2 {
-            assert_eq!(
-                l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
-                0
-            );
-        }
-
         l.tail
             .store(l.slog.len() - GC_FROM_HEAD - 1, Ordering::Relaxed);
         l.ltails[&0].store(1024, Ordering::Relaxed);
@@ -466,7 +459,7 @@ mod tests {
             a
         };
 
-        for i in 0..5 {
+        for i in 2..5 {
             assert_eq!(
                 l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
                 0
@@ -586,14 +579,6 @@ mod tests {
         };
 
         assert!(l.append(&o, &lt, |_o: Operation, _mine| {}).is_ok()); // Required for GC to work correctly.
-
-        for i in 0..2 {
-            // set each i to 1, check was previously 0
-            assert_eq!(
-                l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
-                0
-            );
-        }
 
         l.head.store(2 * 8192, Ordering::SeqCst);
         l.tail.store(l.slog.len() - 10, Ordering::SeqCst);

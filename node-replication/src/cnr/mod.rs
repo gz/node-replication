@@ -24,8 +24,8 @@
 //!
 //! ```rust
 //! #![feature(generic_associated_types)]
-//! use node_replication::cnr::Dispatch;
-//! use node_replication::cnr::LogMapper;
+//! use nr2::cnr::Dispatch;
+//! use nr2::cnr::LogMapper;
 //! use chashmap::CHashMap;
 //!
 //! /// The replicated hashmap uses a concurrent hashmap internally.

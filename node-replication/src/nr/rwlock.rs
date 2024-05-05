@@ -107,7 +107,7 @@ where
     /// # Example
     ///
     /// ```
-    ///     use node_replication::nr::rwlock::RwLock;
+    ///     use nr2::nr::rwlock::RwLock;
     ///
     ///     // Create the lock.
     ///     let lock = RwLock::<usize>::default();
@@ -153,7 +153,7 @@ where
     /// # Example
     ///
     /// ```
-    ///     use node_replication::nr::rwlock::RwLock;
+    ///     use nr2::nr::rwlock::RwLock;
     ///
     ///     // Create the lock.
     ///     let lock = RwLock::<usize>::default();

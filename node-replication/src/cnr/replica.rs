@@ -156,10 +156,10 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::cnr::Dispatch;
-    /// use node_replication::cnr::Log;
-    /// use node_replication::cnr::LogMapper;
-    /// use node_replication::cnr::Replica;
+    /// use nr2::cnr::Dispatch;
+    /// use nr2::cnr::Log;
+    /// use nr2::cnr::LogMapper;
+    /// use nr2::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -298,10 +298,10 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::cnr::Dispatch;
-    /// use node_replication::cnr::Log;
-    /// use node_replication::cnr::LogMapper;
-    /// use node_replication::cnr::Replica;
+    /// use nr2::cnr::Dispatch;
+    /// use nr2::cnr::Log;
+    /// use nr2::cnr::LogMapper;
+    /// use nr2::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -389,10 +389,10 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::cnr::Dispatch;
-    /// use node_replication::cnr::Log;
-    /// use node_replication::cnr::LogMapper;
-    /// use node_replication::cnr::Replica;
+    /// use nr2::cnr::Dispatch;
+    /// use nr2::cnr::Log;
+    /// use nr2::cnr::LogMapper;
+    /// use nr2::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -483,10 +483,10 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::cnr::Dispatch;
-    /// use node_replication::cnr::Log;
-    /// use node_replication::cnr::LogMapper;
-    /// use node_replication::cnr::Replica;
+    /// use nr2::cnr::Dispatch;
+    /// use nr2::cnr::Log;
+    /// use nr2::cnr::LogMapper;
+    /// use nr2::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -637,10 +637,10 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::cnr::Dispatch;
-    /// use node_replication::cnr::Log;
-    /// use node_replication::cnr::LogMapper;
-    /// use node_replication::cnr::Replica;
+    /// use nr2::cnr::Dispatch;
+    /// use nr2::cnr::Log;
+    /// use nr2::cnr::LogMapper;
+    /// use nr2::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
@@ -736,10 +736,10 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::cnr::Dispatch;
-    /// use node_replication::cnr::Log;
-    /// use node_replication::cnr::LogMapper;
-    /// use node_replication::cnr::Replica;
+    /// use nr2::cnr::Dispatch;
+    /// use nr2::cnr::Log;
+    /// use nr2::cnr::LogMapper;
+    /// use nr2::cnr::Replica;
     ///
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;

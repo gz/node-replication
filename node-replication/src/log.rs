@@ -214,7 +214,7 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::log::Log;
+    /// use nr2::log::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -311,7 +311,7 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::log::Log;
+    /// use nr2::log::Log;
     ///
     /// // Operation type that will be stored on the log.
     /// #[derive(Clone)]
@@ -381,7 +381,7 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::log::Log;
+    /// use nr2::log::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -557,7 +557,7 @@ where
     /// Can't execute this until we have access to `pub(crate)` in tests.
     ///
     /// ```ignore
-    /// use node_replication::nr::Log;
+    /// use nr2::nr::Log;
     ///
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
@@ -758,8 +758,8 @@ mod tests {
     // Tests that we can register exactly `MAX_REPLICAS_PER_LOG` replicas.
     #[test]
     fn test_log_register_all() {
-        let l = Log::<Operation, (), ()>::default();
-        for _i in 0..MAX_REPLICAS_PER_LOG {
+        let l = Log::<Operation, (), ()>::default(); // starts with 1 replica by default
+        for _i in 1..MAX_REPLICAS_PER_LOG {
             assert!(l.register().is_some());
         }
         assert!(l.register().is_none());
@@ -769,7 +769,9 @@ mod tests {
     #[test]
     fn test_find_max_tail_gets_highest() {
         let l = Log::<Operation, (), ()>::default();
-        let _lt = l.register().unwrap();
+        for _ in 1..4 {
+            let _lt = l.register().unwrap();
+        }
 
         l.ltails[&0].store(1023, Ordering::Relaxed);
         l.ltails[&1].store(224, Ordering::Relaxed);
@@ -799,7 +801,8 @@ mod tests {
     fn test_remove_replica() {
         let mut log = Log::<Operation, (), ()>::default();
         let mut replicas: Vec<LogToken> = Vec::new();
-        for _i in 0..MAX_REPLICAS_PER_LOG {
+
+        for _i in 1..MAX_REPLICAS_PER_LOG {
             replicas.insert(0, log.register().unwrap());
         }
 
@@ -810,8 +813,7 @@ mod tests {
 
         // replica inventory to be false for the deleted entry
         assert_eq!(
-            log.replica_inventory
-                .fetch_and(1 << (*log_token), Ordering::Relaxed),
+            log.replica_inventory.load(Ordering::Relaxed) & (1 << (*log_token)),
             0
         );
 

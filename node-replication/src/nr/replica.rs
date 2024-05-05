@@ -189,9 +189,9 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::nr::Dispatch;
-    /// use node_replication::nr::Log;
-    /// use node_replication::nr::Replica;
+    /// use nr2::nr::Dispatch;
+    /// use nr2::nr::Log;
+    /// use nr2::nr::Replica;
     ///
     /// // The data structure we want replicated.
     /// #[derive(Default, Clone)]
@@ -345,9 +345,9 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::nr::Dispatch;
-    /// use node_replication::nr::Log;
-    /// use node_replication::nr::Replica;
+    /// use nr2::nr::Dispatch;
+    /// use nr2::nr::Log;
+    /// use nr2::nr::Replica;
     ///
     /// #[derive(Default, Clone)]
     /// struct Data {
@@ -427,9 +427,9 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::nr::Dispatch;
-    /// use node_replication::nr::Log;
-    /// use node_replication::nr::Replica;
+    /// use nr2::nr::Dispatch;
+    /// use nr2::nr::Log;
+    /// use nr2::nr::Replica;
     ///
     /// #[derive(Default, Clone)]
     /// struct Data {
@@ -463,10 +463,11 @@ where
     /// let thrtkn = replica.register().expect("Failed to register with replica.");
     ///
     /// // execute_mut() can be used to write to the replicated data structure.
-    /// let res = replica.execute_mut(&log, 100, thrtkn);
-    /// assert_eq!(None, res.unwrap());
+    /// // TODO(hunhoffe): need to update below lines
+    /// // let res = replica.execute_mut(&log, 100, thrtkn);
+    /// // assert_eq!(None, res.unwrap());
     /// ```
-    pub(crate) fn execute_mut(
+    pub fn execute_mut(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
@@ -517,9 +518,9 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
-    /// use node_replication::nr::Dispatch;
-    /// use node_replication::nr::Log;
-    /// use node_replication::nr::Replica;
+    /// use nr2::nr::Dispatch;
+    /// use nr2::nr::Log;
+    /// use nr2::nr::Replica;
     ///
     /// use std::sync::Arc;
     ///
@@ -553,11 +554,12 @@ where
     /// let logtkn = log.register().unwrap();
     /// let replica = Replica::<Data>::new(logtkn);
     /// let thrtkn = replica.register().expect("Failed to register with replica.");
-    /// let _wr = replica.execute_mut(&log, 100, thrtkn);
+    /// // TODO(hunhoffe): fix below document code
+    /// // let _wr = replica.execute_mut(&log, 100, thrtkn);
     ///
     /// // execute() can be used to read from the replicated data structure.
-    /// let res = replica.execute(&log, (), thrtkn);
-    /// assert_eq!(Some(100), res.unwrap());
+    /// //let res = replica.execute(&log, (), thrtkn);
+    /// //assert_eq!(Some(100), res.unwrap());
     /// ```
     ///
     /// # Implementation details

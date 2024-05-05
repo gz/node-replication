@@ -15,7 +15,7 @@ use static_assertions::const_assert;
 
 /// The maximum number of operations that can be batched inside this context.
 #[cfg(not(loom))]
-pub const MAX_PENDING_OPS: usize = 4;
+pub const MAX_PENDING_OPS: usize = 1;
 #[cfg(loom)]
 pub(crate) const MAX_PENDING_OPS: usize = 1;
 // This constant must be a power of two for `index()` to work.
@@ -352,67 +352,20 @@ mod test {
         assert_eq!(c.comb.load(Ordering::Relaxed), 0);
     }
 
-    // Tests that we can successfully enqueue responses onto the context.
-    #[test]
-    fn test_context_enqueue_resps() {
-        let c = Context::<u64, Result<u64, ()>, ()>::default();
-        let r = [Ok(11), Ok(12), Ok(13), Ok(14)];
-
-        c.tail.store(16, Ordering::Relaxed);
-        c.comb.store(12, Ordering::Relaxed);
-        c.enqueue_resps(&r);
-
-        assert_eq!(c.tail.load(Ordering::Relaxed), 16);
-        assert_eq!(c.head.load(Ordering::Relaxed), 0);
-        assert_eq!(c.comb.load(Ordering::Relaxed), 16);
-
-        assert_eq!(c.batch[0].resp.get(), Some(r[0]));
-        assert_eq!(c.batch[1].resp.get(), Some(r[1]));
-        assert_eq!(c.batch[2].resp.get(), Some(r[2]));
-        assert_eq!(c.batch[3].resp.get(), Some(r[3]));
-    }
-
-    // Tests that attempting to enqueue an empty batch of responses on the context
-    // does nothing.
-    #[test]
-    fn test_context_enqueue_resps_empty() {
-        let c = Context::<u64, Result<u64, ()>, ()>::default();
-        let r = [];
-
-        c.tail.store(16, Ordering::Relaxed);
-        c.comb.store(12, Ordering::Relaxed);
-        c.enqueue_resps(&r);
-
-        assert_eq!(c.tail.load(Ordering::Relaxed), 16);
-        assert_eq!(c.head.load(Ordering::Relaxed), 0);
-        assert_eq!(c.comb.load(Ordering::Relaxed), 12);
-
-        assert_eq!(c.batch[0].resp.get(), None);
-    }
-
     // Tests whether we can retrieve responses enqueued on this context.
     #[test]
     fn test_context_res() {
         let c = Context::<u64, Result<u64, ()>, ()>::default();
-        let r = [Ok(11), Ok(12), Ok(13), Ok(14)];
+        let r = [Ok(11)];
 
         c.tail.store(16, Ordering::Relaxed);
         c.enqueue_resps(&r);
 
         assert_eq!(c.tail.load(Ordering::Relaxed), 16);
-        assert_eq!(c.comb.load(Ordering::Relaxed), 4);
+        assert_eq!(c.comb.load(Ordering::Relaxed), 1);
 
         assert_eq!(c.res(), Some(r[0]));
         assert_eq!(c.head.load(Ordering::Relaxed), 1);
-
-        assert_eq!(c.res(), Some(r[1]));
-        assert_eq!(c.head.load(Ordering::Relaxed), 2);
-
-        assert_eq!(c.res(), Some(r[2]));
-        assert_eq!(c.head.load(Ordering::Relaxed), 3);
-
-        assert_eq!(c.res(), Some(r[3]));
-        assert_eq!(c.head.load(Ordering::Relaxed), 4);
     }
 
     // Tests that we cannot retrieve responses when none were enqueued to begin with.

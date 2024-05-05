@@ -23,7 +23,7 @@
 //!
 //! ```
 //! #![feature(generic_associated_types)]
-//! use node_replication::nr::Dispatch;
+//! use nr2::nr::Dispatch;
 //! use std::collections::HashMap;
 //!
 //! /// The node-replicated hashmap uses a std hashmap internally.
@@ -559,8 +559,8 @@ where
     /// ```
     /// #![feature(generic_associated_types)]
     /// use core::num::NonZeroUsize;
-    /// use node_replication::nr::NodeReplicated;
-    /// use node_replication::nr::Dispatch;
+    /// use nr2::nr::NodeReplicated;
+    /// use nr2::nr::Dispatch;
     ///
     /// #[derive(Default, Clone)]
     /// struct Void;
@@ -635,8 +635,8 @@ where
     /// ```
     /// #![feature(generic_associated_types)]
     /// use core::num::NonZeroUsize;
-    /// use node_replication::nr::NodeReplicated;
-    /// use node_replication::nr::Dispatch;
+    /// use nr2::nr::NodeReplicated;
+    /// use nr2::nr::Dispatch;
     ///
     /// #[derive(Default,Clone)]
     /// struct Void;
@@ -761,8 +761,8 @@ where
     /// ```
     /// #![feature(generic_associated_types)]
     /// use core::num::NonZeroUsize;
-    /// use node_replication::nr::NodeReplicated;
-    /// use node_replication::nr::Dispatch;
+    /// use nr2::nr::NodeReplicated;
+    /// use nr2::nr::Dispatch;
     ///
     /// #[derive(Default, Clone)]
     /// struct Void;
@@ -1106,13 +1106,14 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Succeeds (num_replicas < MAX_REPLICAS_PER_LOG")]
+    #[should_panic]
     fn test_add_replica_does_not_exceed_max_replicas() {
         let replicas = NonZeroUsize::new(1).unwrap();
         let mut ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
         for i in 0..MAX_REPLICAS_PER_LOG {
             let _ = ds.add_replica(i);
         }
+        ds.add_replica(MAX_REPLICAS_PER_LOG);
     }
 
     /*

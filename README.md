@@ -42,7 +42,7 @@ single-threaded HashMap from `std`.
 ```rust
 #![feature(generic_associated_types)]
 use std::collections::HashMap;
-use node_replication::nr::Dispatch;
+use nr2::nr::Dispatch;
 
 /// The node-replicated hashmap uses a std hashmap internally.
 #[derive(Default)]

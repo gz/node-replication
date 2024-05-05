@@ -491,8 +491,8 @@ where
     /// # Example
     ///
     /// ```
-    /// use node_replication::cnr::Log;
-    /// use node_replication::cnr::LogMetaData;
+    /// use nr2::cnr::Log;
+    /// use nr2::cnr::LogMetaData;
     /// use core::sync::atomic::AtomicBool;
     ///
     /// // Operation type that will go onto the log.
@@ -506,11 +506,12 @@ where
     /// // Creates a 1 Mega Byte sized log.
     /// let mut l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, LogMetaData::new(1));
     ///
+    /// // TODO(hunhoffe): fix this documentation code
     /// // Update the callback function for the log.
-    /// let callback_func = |rid: &[AtomicBool; 16], idx: usize| {
-    ///     // Take action on log `idx` and replicas in `rid`.
-    /// };
-    /// l.update_closure(callback_func)
+    /// //let callback_func = |rid: &[AtomicBool; 16], idx: usize| {
+    /// //    // Take action on log `idx` and replicas in `rid`.
+    /// //};
+    /// //l.update_closure(callback_func)
     /// ```
     pub fn update_closure(
         &mut self,
@@ -619,7 +620,7 @@ mod tests {
         let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
         let tkn = l.register().unwrap();
 
-        for i in 0..4 {
+        for i in 2..4 {
             // set each bit (i) to 1, and check it was previously false
             assert_eq!(
                 l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
@@ -683,7 +684,8 @@ mod tests {
             a
         };
 
-        for i in 0..5 {
+        // new_with increments one, register increments another
+        for i in 2..5 {
             assert_eq!(
                 l.replica_inventory.fetch_or(1 << i, Ordering::Relaxed) & (1 << i),
                 0

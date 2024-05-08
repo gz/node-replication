@@ -4,7 +4,6 @@
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
 //! for various hash-maps; added a node-replicated and urcu hash-table for comparison.
-#![feature(generic_associated_types)]
 
 use std::collections::HashMap;
 use std::ffi::c_void;

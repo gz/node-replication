@@ -5,8 +5,6 @@
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
 //! for various hash-maps; added a node-replicated and urcu hash-table for comparison.
 
-#![feature(generic_associated_types)]
-
 use std::sync;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;

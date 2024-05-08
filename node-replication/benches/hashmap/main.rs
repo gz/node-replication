@@ -3,7 +3,6 @@
 
 //! Defines a hash-map that can be replicated.
 #![allow(dead_code)]
-#![feature(generic_associated_types)]
 
 use std::collections::HashMap;
 use std::fmt::Debug;

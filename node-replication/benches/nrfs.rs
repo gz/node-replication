@@ -1,5 +1,4 @@
 #![feature(get_mut_unchecked)]
-#![feature(generic_associated_types)]
 
 use bench_utils::benchmark::*;
 use bench_utils::cnr_mkbench::{self, ReplicaTrait};

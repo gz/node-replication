@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Evaluates a virtual address space implementation using node-replication.
-#![feature(generic_associated_types)]
 
 extern crate alloc;
 
@@ -552,7 +551,7 @@ fn generate_operations(nop: usize) -> Vec<Operation<OpcodeRd, OpcodeWr>> {
 
 fn vspace_single_threaded(c: &mut TestHarness) {
     const NOP: usize = 3000;
-    const LOG_SIZE_BYTES: usize = 16 * 1024 * 1024;
+    const LOG_SIZE_BYTES: usize = 32 * 1024 * 1024;
     mkbench::baseline_comparison::<NodeReplicated<VSpaceDispatcher>>(
         c,
         "vspace",

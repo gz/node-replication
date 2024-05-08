@@ -8,7 +8,6 @@
 //!
 //! It evaluates the overhead of the log with an abstracted model of a generic data-structure
 //! to measure the cache-impact.
-#![feature(generic_associated_types)]
 
 use bench_utils::benchmark::*;
 use bench_utils::{mkbench, Operation};

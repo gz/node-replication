@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Defines a stack data-structure that can be replicated.
-#![feature(generic_associated_types)]
 
 use bench_utils::benchmark::*;
 use bench_utils::{mkbench, Operation};

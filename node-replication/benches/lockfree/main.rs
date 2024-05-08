@@ -4,8 +4,6 @@
 //! Defines a hash-map that can be replicated.
 #![feature(test)]
 #![feature(get_mut_unchecked)]
-#![feature(bench_black_box)]
-#![feature(generic_associated_types)]
 
 use std::fmt::Debug;
 use std::marker::Sync;

@@ -55,7 +55,7 @@ type BenchFn<R> = fn(
     &Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>,
     &Arc<R>,
     &Operation<
-        <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
+        <<R as ReplicaTrait>::D as Dispatch>::ReadOperation<'static>,
         <<R as ReplicaTrait>::D as Dispatch>::WriteOperation,
     >,
     usize,
@@ -68,7 +68,7 @@ type BenchFn<R> = fn(
     &Vec<Arc<Log<'static, <<R as ReplicaTrait>::D as Dispatch>::WriteOperation>>>,
     &Arc<R>,
     &Operation<
-        <<R as ReplicaTrait>::D as Dispatch>::ReadOperation,
+        <<R as ReplicaTrait>::D as Dispatch>::ReadOperation<'static>,
         <<R as ReplicaTrait>::D as Dispatch>::WriteOperation,
     >,
     usize,
@@ -97,9 +97,9 @@ pub trait ReplicaTrait {
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
 
-    fn exec_ro(
+    fn exec_ro<'rop>(
         &self,
-        op: <Self::D as Dispatch>::ReadOperation,
+        op: <Self::D as Dispatch>::ReadOperation<'rop>,
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response;
 }
@@ -146,9 +146,9 @@ impl<'a, T: Dispatch + Sync + Default> ReplicaTrait for Replica<'a, T> {
         return self.execute_mut_scan(op, idx);
     }
 
-    fn exec_ro(
+    fn exec_ro<'rop>(
         &self,
-        op: <Self::D as Dispatch>::ReadOperation,
+        op: <Self::D as Dispatch>::ReadOperation<'rop>,
         idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.execute(op, idx)
@@ -206,14 +206,14 @@ fn write_results(name: String, duration: Duration, results: Vec<usize>) -> std::
 pub(crate) fn baseline_comparison<R: ReplicaTrait>(
     c: &mut TestHarness,
     name: &str,
-    ops: Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>,
+    ops: Vec<
+        Operation<<R::D as Dispatch>::ReadOperation<'static>, <R::D as Dispatch>::WriteOperation>,
+    >,
     log_size: usize,
 ) where
     R::D: Dispatch + Sync + Default,
-    <R::D as Dispatch>::WriteOperation: Send,
-    <R::D as Dispatch>::WriteOperation: Sync,
-    <R::D as Dispatch>::ReadOperation: Sync,
-    <R::D as Dispatch>::ReadOperation: Send,
+    <R::D as Dispatch>::WriteOperation: Send + Sync,
+    <R::D as Dispatch>::ReadOperation<'static>: Sync + Send + Clone,
     <R::D as Dispatch>::Response: Send,
 {
     utils::disable_dvfs();
@@ -403,8 +403,8 @@ pub struct ScaleBenchmark<R: ReplicaTrait>
 where
     <R::D as Dispatch>::WriteOperation: Send,
     <R::D as Dispatch>::WriteOperation: Sync,
-    <R::D as Dispatch>::ReadOperation: Sync,
-    <R::D as Dispatch>::ReadOperation: Send,
+    <R::D as Dispatch>::ReadOperation<'static>: Sync,
+    <R::D as Dispatch>::ReadOperation<'static>: Send,
     <R::D as Dispatch>::Response: Send,
     <R::D as Dispatch>::WriteOperation: 'static,
     R::D: Sync + Dispatch + Default + Send,
@@ -422,8 +422,14 @@ where
     /// Replica <-> Thread/Cpu mapping as used by the benchmark.
     rm: HashMap<usize, Vec<Cpu>>,
     /// An Arc reference to operations executed on the log.
-    operations:
-        Arc<Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>>,
+    operations: Arc<
+        Vec<
+            Operation<
+                <R::D as Dispatch>::ReadOperation<'static>,
+                <R::D as Dispatch>::WriteOperation,
+            >,
+        >,
+    >,
     /// An Arc reference to the log.
     log: Vec<Arc<Log<'static, <R::D as Dispatch>::WriteOperation>>>,
     /// Results of the benchmark we map the #iteration to a list of per-thread results
@@ -451,7 +457,7 @@ where
 impl<R: 'static> ScaleBenchmark<R>
 where
     <R::D as Dispatch>::WriteOperation: Send + Sync + Copy,
-    <R::D as Dispatch>::ReadOperation: Send + Sync + Copy,
+    <R::D as Dispatch>::ReadOperation<'static>: Send + Sync + Copy,
     <R::D as Dispatch>::Response: Send,
     R::D: 'static + Sync + Dispatch + Default + Send,
     R: ReplicaTrait + Sync + Send,
@@ -465,7 +471,10 @@ where
         tm: ThreadMapping,
         ts: usize,
         operations: Vec<
-            Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>,
+            Operation<
+                <R::D as Dispatch>::ReadOperation<'static>,
+                <R::D as Dispatch>::WriteOperation,
+            >,
         >,
         batch_size: usize,
         sync: bool,
@@ -979,12 +988,11 @@ where
 }
 
 /// A generic benchmark configurator for node-replication scalability benchmarks.
-#[derive(Debug)]
 pub struct ScaleBenchBuilder<R: ReplicaTrait>
 where
-    <R::D as Dispatch>::WriteOperation: Send,
+    <R::D as Dispatch>::WriteOperation: Sync + Send + 'static,
+    <R::D as Dispatch>::ReadOperation<'static>: Sync + Send,
     <R::D as Dispatch>::Response: Send,
-    <R::D as Dispatch>::ReadOperation: Send,
     R::D: 'static + Sync + Dispatch + Default,
 {
     /// Replica granularity.
@@ -1005,8 +1013,9 @@ where
     /// If we have many ops and do tests where there is no GC, we may starve
     reset_log: bool,
     /// Operations executed on the log.
-    operations:
-        Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>,
+    operations: Vec<
+        Operation<<R::D as Dispatch>::ReadOperation<'static>, <R::D as Dispatch>::WriteOperation>,
+    >,
     /// Marker for R
     _marker: PhantomData<R>,
 }
@@ -1016,8 +1025,8 @@ where
     R::D: Dispatch + Default + Send + Sync,
     <R::D as Dispatch>::WriteOperation: Send,
     <R::D as Dispatch>::WriteOperation: Sync,
-    <R::D as Dispatch>::ReadOperation: Sync,
-    <R::D as Dispatch>::ReadOperation: Send,
+    <R::D as Dispatch>::ReadOperation<'static>: Sync,
+    <R::D as Dispatch>::ReadOperation<'static>: Send,
     <R::D as Dispatch>::Response: Send,
 {
     /// Initialize an "empty" ScaleBenchBuilder with a  MiB log.
@@ -1026,7 +1035,12 @@ where
     /// you have to at least call `threads`, `thread_mapping`
     /// `replica_strategy` once and set `operations`.
     pub fn new(
-        ops: Vec<Operation<<R::D as Dispatch>::ReadOperation, <R::D as Dispatch>::WriteOperation>>,
+        ops: Vec<
+            Operation<
+                <R::D as Dispatch>::ReadOperation<'static>,
+                <R::D as Dispatch>::WriteOperation,
+            >,
+        >,
     ) -> ScaleBenchBuilder<R> {
         ScaleBenchBuilder {
             replica_strategies: Vec::new(),
@@ -1138,7 +1152,7 @@ where
     where
         R: ReplicaTrait + Sync + Send,
         <R::D as Dispatch>::WriteOperation: Send + Sync + Copy,
-        <R::D as Dispatch>::ReadOperation: Send + Sync + Copy,
+        <R::D as Dispatch>::ReadOperation<'static>: Send + Sync + Copy,
         <R::D as Dispatch>::Response: Send + Sync,
         R::D: 'static + Send + Sync,
     {

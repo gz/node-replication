@@ -100,11 +100,11 @@ impl Default for NrHashMap {
 }
 
 impl Dispatch for NrHashMap {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::Get(key) => return Ok(self.get(key)),
         }
@@ -147,7 +147,7 @@ pub fn generate_operations(
             zipf.sample(&mut t_rng) as u64
         } else {
             // uniform
-            t_rng.gen_range(0, span as u64)
+            t_rng.gen_range(0..span as u64)
         };
 
         if idx % 100 < write_ratio {
@@ -187,7 +187,7 @@ pub fn generate_operations_concurrent(
             zipf.sample(&mut t_rng) as u64
         } else {
             // uniform
-            t_rng.gen_range(0, span as u64)
+            t_rng.gen_range(0..span as u64)
         };
 
         if idx % 100 < write_ratio {
@@ -227,10 +227,10 @@ fn hashmap_scale_out<R>(c: &mut TestHarness, name: &str, write_ratio: usize)
 where
     R: ReplicaTrait + Send + Sync + 'static,
     R::D: Send,
-    R::D: Dispatch<ReadOperation = OpRd>,
+    R::D: Dispatch<ReadOperation<'static> = OpRd>,
     R::D: Dispatch<WriteOperation = OpWr>,
     <R::D as Dispatch>::WriteOperation: Send + Sync,
-    <R::D as Dispatch>::ReadOperation: Send + Sync,
+    <R::D as Dispatch>::ReadOperation<'static>: Send + Sync,
     <R::D as Dispatch>::Response: Sync + Send + Debug,
 {
     let ops = generate_operations(NOP, write_ratio, KEY_SPACE, UNIFORM);
@@ -285,7 +285,7 @@ fn partitioned_hashmap_scale_out(c: &mut TestHarness, name: &str, write_ratio: u
 
 fn concurrent_ds_scale_out<T>(c: &mut TestHarness, name: &str, write_ratio: usize)
 where
-    T: Dispatch<ReadOperation = OpConcurrent>,
+    T: Dispatch<ReadOperation<'static> = OpConcurrent>,
     T: Dispatch<WriteOperation = ()>,
     T: 'static,
     T: Dispatch + Sync + Default + Send,
@@ -323,7 +323,14 @@ fn main() {
     utils::disable_dvfs();
 
     let mut harness = Default::default();
-    let write_ratios = vec![0, 10, 20, 40, 60, 80, 100];
+
+    let write_ratios = if cfg!(feature = "exhaustive") {
+        vec![0, 10, 20, 40, 60, 80, 100]
+    } else if cfg!(feature = "smokebench") {
+        vec![0, 10, 100]
+    } else {
+        vec![100]
+    };
 
     unsafe {
         urcu_sys::rcu_init();

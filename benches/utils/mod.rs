@@ -11,10 +11,19 @@ pub mod topology;
 
 /// A wrapper type to distinguish between arbitrary generated read or write operations
 /// in the test harness.
-#[derive(Debug, Clone)]
-pub enum Operation<R: Sized + Clone + PartialEq + Debug, W: Sized + Clone + PartialEq + Debug> {
+#[derive(Clone)]
+pub enum Operation<R: Sized, W: Sized + Clone + PartialEq> {
     ReadOperation(R),
     WriteOperation(W),
+}
+
+impl Debug for Operation<(), ()> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Operation::ReadOperation(_) => write!(f, "ReadOperation"),
+            Operation::WriteOperation(_) => write!(f, "WriteOperation"),
+        }
+    }
 }
 
 /// Type to identify an OS thread.

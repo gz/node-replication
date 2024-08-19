@@ -82,9 +82,9 @@ where
         unsafe { (&mut *self.data_structure.get()).dispatch_mut(op) }
     }
 
-    fn exec_ro(
+    fn exec_ro<'rop>(
         &self,
-        op: <T as Dispatch>::ReadOperation,
+        op: <T as Dispatch>::ReadOperation<'rop>,
         _idx: ReplicaToken,
     ) -> <T as Dispatch>::Response {
         unsafe { (&*self.data_structure.get()).dispatch(op) }
@@ -148,9 +148,9 @@ where
         unreachable!("All opertations must be read ops")
     }
 
-    fn exec_ro(
+    fn exec_ro<'rop>(
         &self,
-        op: <Self::D as Dispatch>::ReadOperation,
+        op: <Self::D as Dispatch>::ReadOperation<'rop>,
         _idx: ReplicaToken,
     ) -> <Self::D as Dispatch>::Response {
         self.data_structure.dispatch(op)
@@ -171,11 +171,11 @@ impl Default for CHashMapWrapper {
 }
 
 impl Dispatch for CHashMapWrapper {
-    type ReadOperation = OpConcurrent;
+    type ReadOperation<'rop> = OpConcurrent;
     type WriteOperation = ();
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpConcurrent::Get(key) => Ok(self.0.get(&key).map(|v| *v)),
             OpConcurrent::Put(key, val) => {
@@ -205,11 +205,11 @@ impl Default for StdWrapper {
 }
 
 impl Dispatch for StdWrapper {
-    type ReadOperation = OpConcurrent;
+    type ReadOperation<'rop> = OpConcurrent;
     type WriteOperation = ();
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpConcurrent::Get(key) => Ok(self.0.read().get(&key).map(|&v| v)),
             OpConcurrent::Put(key, val) => {
@@ -239,11 +239,11 @@ impl Default for FlurryWrapper {
 }
 
 impl Dispatch for FlurryWrapper {
-    type ReadOperation = OpConcurrent;
+    type ReadOperation<'rop> = OpConcurrent;
     type WriteOperation = ();
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpConcurrent::Get(key) => Ok(self.0.pin().get(&key).map(|v| *v)),
             OpConcurrent::Put(key, val) => {
@@ -273,11 +273,11 @@ impl Default for DashWrapper {
 }
 
 impl Dispatch for DashWrapper {
-    type ReadOperation = OpConcurrent;
+    type ReadOperation<'rop> = OpConcurrent;
     type WriteOperation = ();
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpConcurrent::Get(key) => Ok(self.0.get(&key).map(|v| *v)),
             OpConcurrent::Put(key, val) => {
@@ -379,11 +379,11 @@ unsafe fn to_test_node(node: *mut urcu_sys::cds_lfht_node) -> *mut lfht_test_nod
 }
 
 impl Dispatch for RcuHashMap {
-    type ReadOperation = OpConcurrent;
+    type ReadOperation<'rop> = OpConcurrent;
     type WriteOperation = ();
     type Response = Result<Option<u64>, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         unsafe {
             match op {
                 OpConcurrent::Get(key) => {

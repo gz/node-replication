@@ -1,27 +1,25 @@
 // Copyright © 2017-2019 Jon Gjengset <jon@thesquareplanet.com>.
-// Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
 //! for various hash-maps; added a node-replicated and urcu hash-table for comparison.
-use chashmap::CHashMap;
-use clap::{crate_version, value_t, App, Arg};
-use rand::distributions::Distribution;
-use rand::RngCore;
-use std::collections::HashMap;
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem;
+use std::num::NonZeroUsize;
 use std::ptr;
 use std::sync;
 use std::thread;
 use std::time;
 
+use chashmap::CHashMap;
+use clap::{crate_version, value_t, App, Arg};
 use node_replication::{Dispatch, Log, Replica, ReplicaToken};
-
+use rand::distributions::Distribution;
+use rand::RngCore;
 use urcu_sys;
-
-mod utils;
 
 fn main() {
     let args = std::env::args().filter(|e| e != "--bench");
@@ -85,7 +83,10 @@ fn main() {
 
     let versions: Vec<&str> = match matches.values_of("compare") {
         Some(iter) => iter.collect(),
+        #[cfg(feature = "exhaustive")]
         None => vec!["std", "chashmap", "urcu", "nr", "evmap", "flurry"],
+        #[cfg(not(feature = "exhaustive"))]
+        None => vec!["urcu", "nr"],
     };
 
     let stat = |var: &str, op, results: Vec<(_, usize)>| {
@@ -129,7 +130,7 @@ fn main() {
     }
 
     // then, benchmark Arc<flurry::HashMap>
-    if versions.contains(&"std") {
+    if versions.contains(&"flurry") {
         let map: flurry::HashMap<u64, u64> = flurry::HashMap::with_capacity(5_000_000);
         let map = sync::Arc::new(map);
         let start = time::Instant::now();
@@ -298,7 +299,7 @@ fn drive<B: Backend>(
     let zipf = zipf::ZipfDistribution::new(span, 1.03).unwrap();
     while time::Instant::now() < end {
         // generate both so that overhead is always the same
-        let id_uniform: u64 = t_rng.gen_range(0, span as u64);
+        let id_uniform: u64 = t_rng.gen_range(0..span as u64);
         let id_skewed = zipf.sample(&mut t_rng) as u64;
         let id = if skewed { id_skewed } else { id_uniform };
         if write {
@@ -409,11 +410,11 @@ impl Default for NrHashMap {
 }
 
 impl Dispatch for NrHashMap {
-    type ReadOperation = OpRd;
+    type ReadOperation<'rop> = OpRd;
     type WriteOperation = OpWr;
     type Response = Result<u64, ()>;
 
-    fn dispatch(&self, op: Self::ReadOperation) -> Self::Response {
+    fn dispatch<'rop>(&self, op: Self::ReadOperation<'rop>) -> Self::Response {
         match op {
             OpRd::Get(key) => return Ok(self.get(key)),
         }

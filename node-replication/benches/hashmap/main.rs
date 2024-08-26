@@ -326,7 +326,7 @@ fn main() {
     } else if cfg!(feature = "smokebench") {
         vec![0, 10, 100]
     } else {
-        vec![100]
+        vec![0, 10, 80]
     };
 
     unsafe {
@@ -335,7 +335,7 @@ fn main() {
 
     //hashmap_single_threaded(&mut harness);
     for write_ratio in write_ratios.into_iter() {
-        hashmap_scale_out::<NodeReplicated<NrHashMap>>(&mut harness, "hashmap", write_ratio);
+        hashmap_scale_out::<NodeReplicated<NrHashMap>>(&mut harness, "hashmap2", write_ratio);
 
         #[cfg(feature = "cmp")]
         {

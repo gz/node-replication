@@ -50,6 +50,13 @@ impl AtomicBitmap {
         self.data[idx].fetch_and(!(1 << bit), Ordering::SeqCst);
     }
 
+    pub fn flip_bit(&self, bit_pos: usize) {
+        assert!(bit_pos < self.data.len() * 64);
+        let idx = bit_pos / 64;
+        let bit = bit_pos % 64;
+        self.data[idx].fetch_xor(1 << bit, Ordering::SeqCst);
+    }
+
     pub fn _test_bit(&self, bit_pos: usize) -> bool {
         assert!(bit_pos < self.data.len() * 64);
         let idx = bit_pos / 64;

@@ -152,7 +152,7 @@ where
             // Successfully reserved entries on the shared log. Add the operations in.
             for (i, op) in ops.iter().enumerate().take(nops) {
                 let e = self.slog[self.index(tail + i)].as_ptr();
-                let mut m = self.lmasks[&(idx.0 - 1)].get();
+                let mut m = self.lmasks._test_bit(idx.0 - 1);
 
                 // This entry was just reserved so it should be dead (!= m). However, if
                 // the log has wrapped around, then the alive mask has flipped. In this
@@ -259,7 +259,7 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[&(idx.0 - 1)].get() }
+            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks._test_bit(idx.0 - 1) }
             {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
@@ -267,7 +267,7 @@ where
                         i,
                         self.index(i),
                         idx.0 - 1,
-                        self.lmasks[&(idx.0 - 1)].get()
+                        self.lmasks._test_bit(idx.0 - 1)
                     );
                 }
                 iteration += 1;
@@ -285,8 +285,7 @@ where
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.slog.len() - 1 {
-                self.lmasks[&(idx.0 - 1)].set(!self.lmasks[&(idx.0 - 1)].get());
-                //trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
+                self.lmasks.flip_bit(idx.0 - 1);
             }
         }
 
@@ -469,7 +468,7 @@ mod tests {
         l.tail.store(l.slog.len() - 10, Ordering::Relaxed);
         assert!(l.append(&o, &lt, |_o: Operation, _mine: bool| {}).is_ok());
 
-        assert_eq!(l.lmasks[&0].get(), true);
+        assert_eq!(l.lmasks._test_bit(0), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
     }
 
@@ -587,7 +586,7 @@ mod tests {
         l.ltails[&0].store(l.slog.len() - 10, Ordering::SeqCst);
         l.exec(&lt, &mut f);
 
-        assert_eq!(l.lmasks[&0].get(), false);
+        assert_eq!(l.lmasks._test_bit(0), false);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
     }
 

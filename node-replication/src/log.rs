@@ -20,6 +20,7 @@ pub use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use static_assertions::const_assert;
 
 use crate::context::MAX_PENDING_OPS;
+use crate::nr::atomic_bitmap::AtomicBitmap;
 use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// A token that identifies a replica for a log.
@@ -162,8 +163,7 @@ where
     /// Array consisting of local alive masks for each registered replica. Required
     /// because replicas make independent progress over the log, so we need to
     /// track log wrap-arounds for each of them separately.
-    // pub(crate) lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG],
-    pub(crate) lmasks: HashMap<usize, CachePadded<Cell<bool>>>,
+    pub(crate) lmasks: AtomicBitmap,
 
     /// Meta-data used by log implementations.
     pub(crate) metadata: LM,
@@ -240,12 +240,14 @@ where
         // Convert it to a boxed slice, so we don't accidentially change the size
         let raw = v.into_boxed_slice();
 
-        #[allow(clippy::declare_interior_mutable_const)]
-        const LMASK_DEFAULT: CachePadded<Cell<bool>> = CachePadded::new(Cell::new(true));
+        let lmask_init = AtomicBitmap::default();
+        //#[allow(clippy::declare_interior_mutable_const)]
+        //const LMASK_DEFAULT: CachePadded<Cell<bool>> = CachePadded::new(Cell::new(true));
 
-        let mut lmask_init = HashMap::with_capacity(MAX_REPLICAS_PER_LOG);
+        //let mut lmask_init = HashMap::with_capacity(MAX_REPLICAS_PER_LOG);
         for i in 0..MAX_REPLICAS_PER_LOG {
-            lmask_init.insert(i, LMASK_DEFAULT);
+            //lmask_init.insert(i, LMASK_DEFAULT);
+            lmask_init.set_bit(i);
         }
 
         #[cfg(not(loom))]
@@ -291,7 +293,7 @@ where
                 ctail: CachePadded::new(AtomicUsize::new(0usize)),
                 ltails: ltails_init,
                 replica_inventory: AtomicUsize::new(1usize),
-                lmasks: HashMap::with_capacity(MAX_REPLICAS_PER_LOG),
+                lmasks: AtomicBitmap::new(), // TODO: should maybe have default set?
                 metadata,
             }
         }
@@ -537,7 +539,7 @@ where
         // Next, reset replica-local metadata.
         for r in 0..MAX_REPLICAS_PER_LOG {
             self.ltails[&r].store(0, Ordering::Relaxed);
-            self.lmasks[&r].set(true);
+            self.lmasks.set_bit(r);
         }
 
         // Next, free up all log entries. Use pointers to avoid memcpy and speed up the
@@ -685,7 +687,7 @@ mod tests {
         }
 
         for i in 0..MAX_REPLICAS_PER_LOG {
-            assert_eq!(l.lmasks[&i].get(), true);
+            assert_eq!(l.lmasks._test_bit(i), true);
         }
     }
 
@@ -736,7 +738,7 @@ mod tests {
         }
 
         for i in 0..MAX_REPLICAS_PER_LOG {
-            assert_eq!(l.lmasks[&i].get(), true);
+            assert_eq!(l.lmasks._test_bit(i), true);
         }
     }
 
@@ -821,6 +823,6 @@ mod tests {
         assert_eq!(log.ltails[log_token].load(Ordering::Relaxed), 0);
 
         // lmasks to be set to true
-        assert_eq!(log.lmasks[log_token].get(), true);
+        assert_eq!(log.lmasks._test_bit(*log_token), true);
     }
 }

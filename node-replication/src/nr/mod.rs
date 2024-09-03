@@ -83,7 +83,7 @@ use reusable_box::ReusableBoxFuture;
 
 use arrayvec::ArrayVec;
 
-mod atomic_bitmap;
+pub mod atomic_bitmap;
 mod context;
 pub mod log;
 pub mod replica;
@@ -493,11 +493,15 @@ where
         self.log.ltails[&replica_id].store(max_local_tail, Ordering::Relaxed);
 
         // find and push existing lmask entry for new replica
-        let lmask_status = self.log.lmasks[&max_replica_idx].get();
-        self.log.lmasks[&replica_id].set(lmask_status);
+        let lmask_status = self.log.lmasks._test_bit(max_replica_idx);
+        if lmask_status {
+            self.log.lmasks.set_bit(replica_id);
+        } else {
+            self.log.lmasks.clear_bit(replica_id);
+        }
         logging::debug!(
-            "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks[&replica_id] {:?}",
-            self.log.lmasks[&replica_id].get()
+            "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks._test_bit(&replica_id) {:?}",
+            self.log.lmasks._test_bit(replica_id)
         );
         self.log.add_log_replica(log_token);
 

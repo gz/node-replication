@@ -1,8 +1,9 @@
-// Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Utility functions to do multi-threaded benchmarking of the log infrastructure.
-#![allow(dead_code)]
+//! Helper code for benchmarks.
+
+#![feature(get_mut_unchecked)]
 
 use std::fmt::Debug;
 

@@ -240,7 +240,7 @@ where
         .thread_defaults()
         .update_batch(128)
         .log_size(32 * 1024 * 1024)
-        .replica_strategy(mkbench::ReplicaStrategy::One)
+        //.replica_strategy(mkbench::ReplicaStrategy::One)
         .replica_strategy(mkbench::ReplicaStrategy::Socket)
         .thread_mapping(ThreadMapping::Interleave)
         .log_strategy(mkbench::LogStrategy::One)
@@ -342,7 +342,7 @@ fn main() {
 
         #[cfg(feature = "cmp")]
         {
-            partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
+            //partitioned_hashmap_scale_out(&mut harness, "partitioned-hashmap", write_ratio);
             concurrent_ds_scale_out::<CHashMapWrapper>(&mut harness, "chashmap", write_ratio);
             concurrent_ds_scale_out::<StdWrapper>(&mut harness, "std", write_ratio);
             concurrent_ds_scale_out::<FlurryWrapper>(&mut harness, "flurry", write_ratio);

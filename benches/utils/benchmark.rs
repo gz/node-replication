@@ -1,8 +1,10 @@
-// Copyright © 2019-2020 VMware, Inc. All Rights Reserved.
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Utility functions to do multi-threaded benchmarking.
-//! Mostly these definitions are leftovers from the time when we used criterion.
+//!
+//! Mostly these definitions are leftovers from the time when we used criterion
+//! and stayed for compatibility with the old benchmarking code.
 
 #![allow(unused)]
 use std::fmt::Display;
@@ -130,8 +132,8 @@ impl BenchmarkGroup {
     pub fn finish(self) {}
 }
 
-pub(crate) struct TestHarness {
-    duration: Duration,
+pub struct TestHarness {
+    pub(crate) duration: Duration,
 }
 
 impl TestHarness {
@@ -144,13 +146,52 @@ impl TestHarness {
 }
 
 impl TestHarness {
-    pub(crate) fn new(d: Duration) -> Self {
-        TestHarness { duration: d }
+    pub fn new(d: Duration) -> Self {
+        if cfg!(feature = "smokebench") {
+            log::warn!("smokebench enabled, force execution to 500 ms");
+            let d = Duration::from_millis(500);
+            TestHarness { duration: d }
+        } else {
+            TestHarness { duration: d }
+        }
     }
 }
 
 impl Default for TestHarness {
     fn default() -> Self {
-        TestHarness::new(Duration::from_secs(5))
+        if cfg!(feature = "smokebench") {
+            TestHarness::new(Duration::from_millis(500))
+        } else {
+            TestHarness::new(Duration::from_secs(5))
+        }
+    }
+}
+
+pub fn mean(data: &[usize]) -> Option<f64> {
+    let sum = data.iter().sum::<usize>() as f64;
+    let count = data.len();
+
+    match count {
+        positive if positive > 0 => Some(sum / count as f64),
+        _ => None,
+    }
+}
+
+pub fn std_deviation(data: &[usize]) -> Option<f64> {
+    match (mean(data), data.len()) {
+        (Some(data_mean), count) if count > 0 => {
+            let variance = data
+                .iter()
+                .map(|value| {
+                    let diff = data_mean - (*value as f64);
+
+                    diff * diff
+                })
+                .sum::<f64>()
+                / count as f64;
+
+            Some(variance.sqrt())
+        }
+        _ => None,
     }
 }

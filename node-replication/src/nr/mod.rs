@@ -490,18 +490,14 @@ where
         **new_replica_data = replica_locked;
 
         // push ltail entry for new replica
-        self.log.ltails[&replica_id].store(max_local_tail, Ordering::Relaxed);
+        self.log.ltails[replica_id].store(max_local_tail, Ordering::Relaxed);
 
         // find and push existing lmask entry for new replica
-        let lmask_status = self.log.lmasks._test_bit(max_replica_idx);
-        if lmask_status {
-            self.log.lmasks.set_bit(replica_id);
-        } else {
-            self.log.lmasks.clear_bit(replica_id);
-        }
+        let lmask_status = self.log.lmasks[max_replica_idx].get();
+        self.log.lmasks[replica_id].set(lmask_status);
         logging::debug!(
-            "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks._test_bit(&replica_id) {:?}",
-            self.log.lmasks._test_bit(replica_id)
+            "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks[replica_id].get() {:?}",
+            self.log.lmasks[replica_id].get()
         );
         self.log.add_log_replica(log_token);
 

@@ -900,7 +900,7 @@ where
                 // Can't run on 0 threads
                 self.threads(t + 1);
             } else {
-                if t < 96 {
+                if t <= 96 {
                     self.threads(t);
                 }
             }

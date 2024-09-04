@@ -152,7 +152,7 @@ where
             // Successfully reserved entries on the shared log. Add the operations in.
             for (i, op) in ops.iter().enumerate().take(nops) {
                 let e = self.slog[self.index(tail + i)].as_ptr();
-                let mut m = self.lmasks._test_bit(idx.0 - 1);
+                let mut m = self.lmasks[idx.0 - 1].get();
 
                 // This entry was just reserved so it should be dead (!= m). However, if
                 // the log has wrapped around, then the alive mask has flipped. In this
@@ -236,7 +236,7 @@ where
     #[inline(always)]
     pub(crate) fn exec<F: FnMut(T, bool)>(&self, idx: &LogToken, d: &mut F) {
         // Load the logical log offset from which we must execute operations.
-        let ltail = self.ltails[&(idx.0 - 1)].load(Ordering::Relaxed);
+        let ltail = self.ltails[idx.0 - 1].load(Ordering::Relaxed);
 
         // Check if we have any work to do by comparing our local tail with the log's
         // global tail. If they're equal, then we're done here and can simply return.
@@ -259,15 +259,14 @@ where
             let mut iteration = 1;
             let e = self.slog[self.index(i)].as_ptr();
 
-            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks._test_bit(idx.0 - 1) }
-            {
+            while unsafe { (*e).alivef.load(Ordering::Acquire) != self.lmasks[idx.0 - 1].get() } {
                 if iteration % WARN_THRESHOLD == 0 {
                     warn!(
                         "alivef not being set for self.index(i={}) = {} (self.lmasks[{}] is {})...",
                         i,
                         self.index(i),
                         idx.0 - 1,
-                        self.lmasks._test_bit(idx.0 - 1)
+                        self.lmasks[idx.0 - 1].get()
                     );
                 }
                 iteration += 1;
@@ -285,14 +284,15 @@ where
 
             // Looks like we're going to wrap around now; flip this replica's local mask.
             if self.index(i) == self.slog.len() - 1 {
-                self.lmasks.flip_bit(idx.0 - 1);
+                self.lmasks[idx.0 - 1].set(!self.lmasks[idx.0 - 1].get());
+                //trace!("idx: {} lmask: {}", idx, self.lmasks[idx - 1].get());
             }
         }
 
         // Update the completed tail after we've executed these operations. Also update
         // this replica's local tail.
         self.ctail.fetch_max(gtail, Ordering::Relaxed);
-        self.ltails[&(idx.0 - 1)].store(gtail, Ordering::Relaxed);
+        self.ltails[idx.0 - 1].store(gtail, Ordering::Relaxed);
     }
 
     /// Advances the head of the log forward. If a replica has stopped making
@@ -406,9 +406,9 @@ mod tests {
             );
         }
 
-        l.ltails[&0].store(1023, Ordering::Relaxed);
-        l.ltails[&1].store(224, Ordering::Relaxed);
-        l.ltails[&2].store(4096, Ordering::Relaxed);
+        l.ltails[0].store(1023, Ordering::Relaxed);
+        l.ltails[1].store(224, Ordering::Relaxed);
+        l.ltails[2].store(4096, Ordering::Relaxed);
         // l.ltails[3].store(799, Ordering::Relaxed);
 
         assert!(l
@@ -433,7 +433,7 @@ mod tests {
 
         l.tail
             .store(l.slog.len() - GC_FROM_HEAD - 1, Ordering::Relaxed);
-        l.ltails[&0].store(1024, Ordering::Relaxed);
+        l.ltails[0].store(1024, Ordering::Relaxed);
         assert!(l.append(&o, &lt, |_o: Operation, _mine: bool| {}).is_ok());
 
         assert_eq!(l.head.load(Ordering::Relaxed), 1024);
@@ -468,7 +468,7 @@ mod tests {
         l.tail.store(l.slog.len() - 10, Ordering::Relaxed);
         assert!(l.append(&o, &lt, |_o: Operation, _mine: bool| {}).is_ok());
 
-        assert_eq!(l.lmasks._test_bit(0), true);
+        assert_eq!(l.lmasks[0].get(), true);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
     }
 
@@ -493,7 +493,7 @@ mod tests {
         );
         assert_eq!(
             l.tail.load(Ordering::Relaxed),
-            l.ltails[&0].load(Ordering::Relaxed)
+            l.ltails[0].load(Ordering::Relaxed)
         );
     }
 
@@ -554,7 +554,7 @@ mod tests {
         );
         assert_eq!(
             l.tail.load(Ordering::Relaxed),
-            l.ltails[&0].load(Ordering::Relaxed)
+            l.ltails[0].load(Ordering::Relaxed)
         );
     }
 
@@ -583,10 +583,10 @@ mod tests {
         l.tail.store(l.slog.len() - 10, Ordering::SeqCst);
         assert!(l.append(&o, &lt, |_o: Operation, _mine| {}).is_ok());
 
-        l.ltails[&0].store(l.slog.len() - 10, Ordering::SeqCst);
+        l.ltails[0].store(l.slog.len() - 10, Ordering::SeqCst);
         l.exec(&lt, &mut f);
 
-        assert_eq!(l.lmasks._test_bit(0), false);
+        assert_eq!(l.lmasks[0].get(), false);
         assert_eq!(l.tail.load(Ordering::Relaxed), l.slog.len() + 1014);
     }
 

@@ -5,7 +5,7 @@
 //! circular-buffer.
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use hashbrown::hash_map::HashMap;
+use arr_macro::arr;
 
 use core::cell::Cell;
 use core::default::Default;
@@ -20,7 +20,6 @@ pub use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use static_assertions::const_assert;
 
 use crate::context::MAX_PENDING_OPS;
-use crate::nr::atomic_bitmap::AtomicBitmap;
 use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// A token that identifies a replica for a log.
@@ -154,7 +153,7 @@ where
     /// Required for garbage collection; since replicas make progress over the log
     /// independently, we want to make sure that we don't garbage collect operations
     /// that haven't been executed by all replicas.
-    pub(crate) ltails: HashMap<usize, CachePadded<AtomicUsize>>,
+    pub(crate) ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS_PER_LOG], // TODO(erika) highest bit to indicate use?)
 
     /// Identifier that will be allocated to the next replica that registers with
     /// this Log. Also required to correctly index into ltails above.
@@ -163,7 +162,7 @@ where
     /// Array consisting of local alive masks for each registered replica. Required
     /// because replicas make independent progress over the log, so we need to
     /// track log wrap-arounds for each of them separately.
-    pub(crate) lmasks: AtomicBitmap,
+    pub(crate) lmasks: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG],
 
     /// Meta-data used by log implementations.
     pub(crate) metadata: LM,
@@ -240,35 +239,21 @@ where
         // Convert it to a boxed slice, so we don't accidentially change the size
         let raw = v.into_boxed_slice();
 
-        let lmask_init = AtomicBitmap::default();
-        //#[allow(clippy::declare_interior_mutable_const)]
-        //const LMASK_DEFAULT: CachePadded<Cell<bool>> = CachePadded::new(Cell::new(true));
-
-        //let mut lmask_init = HashMap::with_capacity(MAX_REPLICAS_PER_LOG);
-        for i in 0..MAX_REPLICAS_PER_LOG {
-            //lmask_init.insert(i, LMASK_DEFAULT);
-            lmask_init.set_bit(i);
+        let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG] = arr![Default::default(); 5];
+        for idx in 0..MAX_REPLICAS_PER_LOG {
+            fls[idx].set(true)
         }
 
         #[cfg(not(loom))]
         {
-            #[allow(clippy::declare_interior_mutable_const)]
-            const LTAIL_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
-
-            let mut ltails_init = HashMap::with_capacity(MAX_REPLICAS_PER_LOG);
-
-            for i in 0..MAX_REPLICAS_PER_LOG {
-                ltails_init.insert(i, LTAIL_DEFAULT);
-            }
-
             Log {
                 slog: raw,
                 head: CachePadded::new(AtomicUsize::new(0usize)),
                 tail: CachePadded::new(AtomicUsize::new(0usize)),
                 ctail: CachePadded::new(AtomicUsize::new(0usize)),
-                ltails: ltails_init,
+                ltails: arr![Default::default(); 5],
                 replica_inventory: AtomicUsize::new(1usize),
-                lmasks: lmask_init,
+                lmasks: fls,
                 metadata,
             }
         }
@@ -277,23 +262,14 @@ where
         // https://github.com/tokio-rs/loom/issues/170 is fixed:
         #[cfg(loom)]
         {
-            use arr_macro::arr;
-
-            const LTAIL_DEFAULT: CachePadded<AtomicUsize> = CachePadded::new(AtomicUsize::new(0));
-
-            let mut ltails_init = HashMap::with_capacity(3);
-
-            for i in 0..3 {
-                ltails_init.insert(i, LTAIL_DEFAULT);
-            }
             Log {
                 slog: raw,
                 head: CachePadded::new(AtomicUsize::new(0usize)),
                 tail: CachePadded::new(AtomicUsize::new(0usize)),
                 ctail: CachePadded::new(AtomicUsize::new(0usize)),
-                ltails: ltails_init,
+                ltails: arr![Default::default(); 192],
                 replica_inventory: AtomicUsize::new(1usize),
-                lmasks: AtomicBitmap::new(), // TODO: should maybe have default set?
+                lmasks: fls,
                 metadata,
             }
         }
@@ -437,13 +413,12 @@ where
     /// The ID (in `LogToken`) of the replica with the lowest tail and the
     /// corresponding/lowest tail `idx` in the `Log`.
     pub(crate) fn find_min_tail(&self) -> (usize, usize) {
-        let (mut min_replica_idx, mut min_local_tail) =
-            (0, self.ltails[&0].load(Ordering::Relaxed));
+        let (mut min_replica_idx, mut min_local_tail) = (0, self.ltails[0].load(Ordering::Relaxed));
 
         // Find the smallest local tail across all replicas.
         for idx in 1..MAX_REPLICAS_PER_LOG {
             if self.replica_inventory.load(Ordering::Relaxed) & (1 << idx) != 0 {
-                let cur_local_tail = self.ltails[&(idx - 1)].load(Ordering::Relaxed);
+                let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
                 //info!("Replica {} cur_local_tail {}.", idx - 1, cur_local_tail);
 
                 if cur_local_tail < min_local_tail {
@@ -462,13 +437,12 @@ where
     /// The ID (in `LogToken`) of the replica with the highest tail and the
     /// corresponding/highest tail `idx` in the `Log`.
     pub(crate) fn find_max_tail(&self) -> (usize, usize) {
-        let (mut max_replica_idx, mut max_local_tail) =
-            (0, self.ltails[&0].load(Ordering::Relaxed));
+        let (mut max_replica_idx, mut max_local_tail) = (0, self.ltails[0].load(Ordering::Relaxed));
 
         // Find the local tail across all replicas.
         for idx in 1..MAX_REPLICAS_PER_LOG {
             if self.replica_inventory.load(Ordering::Relaxed) & (1 << idx) != 0 {
-                let cur_local_tail = self.ltails[&(idx - 1)].load(Ordering::Relaxed);
+                let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
                 if cur_local_tail > max_local_tail {
                     max_local_tail = cur_local_tail;
                     max_replica_idx = idx - 1;
@@ -538,8 +512,8 @@ where
 
         // Next, reset replica-local metadata.
         for r in 0..MAX_REPLICAS_PER_LOG {
-            self.ltails[&r].store(0, Ordering::Relaxed);
-            self.lmasks.set_bit(r);
+            self.ltails[r].store(0, Ordering::Relaxed);
+            self.lmasks[r].set(true);
         }
 
         // Next, free up all log entries. Use pointers to avoid memcpy and speed up the
@@ -611,7 +585,7 @@ where
     /// ```
     #[inline(always)]
     pub(crate) fn is_replica_synced_for_reads(&self, idx: &LogToken, ctail: usize) -> bool {
-        self.ltails[&(idx.0 - 1)].load(Ordering::Relaxed) >= ctail
+        self.ltails[idx.0 - 1].load(Ordering::Relaxed) >= ctail
     }
 
     /// This method returns the current ctail value for the log.
@@ -683,11 +657,11 @@ mod tests {
         assert_eq!(l.metadata, ());
 
         for i in 0..MAX_REPLICAS_PER_LOG {
-            assert_eq!(l.ltails[&i].load(Ordering::Relaxed), 0);
+            assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
         }
 
         for i in 0..MAX_REPLICAS_PER_LOG {
-            assert_eq!(l.lmasks._test_bit(i), true);
+            assert_eq!(l.lmasks[i].get(), true);
         }
     }
 
@@ -734,11 +708,11 @@ mod tests {
         assert_eq!(l.ctail.load(Ordering::Relaxed), 0);
 
         for i in 0..MAX_REPLICAS_PER_LOG {
-            assert_eq!(l.ltails[&i].load(Ordering::Relaxed), 0);
+            assert_eq!(l.ltails[i].load(Ordering::Relaxed), 0);
         }
 
         for i in 0..MAX_REPLICAS_PER_LOG {
-            assert_eq!(l.lmasks._test_bit(i), true);
+            assert_eq!(l.lmasks[i].get(), true);
         }
     }
 
@@ -775,10 +749,10 @@ mod tests {
             let _lt = l.register().unwrap();
         }
 
-        l.ltails[&0].store(1023, Ordering::Relaxed);
-        l.ltails[&1].store(224, Ordering::Relaxed);
-        l.ltails[&2].store(4096, Ordering::Relaxed);
-        l.ltails[&3].store(799, Ordering::Relaxed);
+        l.ltails[0].store(1023, Ordering::Relaxed);
+        l.ltails[1].store(224, Ordering::Relaxed);
+        l.ltails[2].store(4096, Ordering::Relaxed);
+        l.ltails[3].store(799, Ordering::Relaxed);
 
         assert_eq!(l.find_max_tail(), (2, 4096))
     }
@@ -790,10 +764,10 @@ mod tests {
         let _lt = l.register().unwrap();
         l.replica_inventory.store(0b1111, Ordering::Relaxed);
 
-        l.ltails[&0].store(1023, Ordering::Relaxed);
-        l.ltails[&1].store(224, Ordering::Relaxed);
-        l.ltails[&2].store(4096, Ordering::Relaxed);
-        l.ltails[&3].store(799, Ordering::Relaxed);
+        l.ltails[0].store(1023, Ordering::Relaxed);
+        l.ltails[1].store(224, Ordering::Relaxed);
+        l.ltails[2].store(4096, Ordering::Relaxed);
+        l.ltails[3].store(799, Ordering::Relaxed);
 
         assert_eq!(l.find_min_tail(), (1, 224))
     }
@@ -820,9 +794,9 @@ mod tests {
         );
 
         // ltails to be zerod out
-        assert_eq!(log.ltails[log_token].load(Ordering::Relaxed), 0);
+        assert_eq!(log.ltails[*log_token].load(Ordering::Relaxed), 0);
 
         // lmasks to be set to true
-        assert_eq!(log.lmasks._test_bit(*log_token), true);
+        assert_eq!(log.lmasks[*log_token].get(), true);
     }
 }

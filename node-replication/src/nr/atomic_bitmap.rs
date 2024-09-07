@@ -34,31 +34,28 @@ impl AtomicBitmap {
     }
 
     pub fn set_bit(&self, bit_pos: usize) {
-        if bit_pos >= self.data.len() * 64 {
-            panic!("bit_pos {} >= {}", bit_pos, self.data.len() * 64);
-        }
-        assert!(bit_pos < self.data.len() * 64);
+        debug_assert!(bit_pos < self.data.len() * 64);
         let idx = bit_pos / 64;
         let bit = bit_pos % 64;
         self.data[idx].fetch_or(1 << bit, Ordering::SeqCst);
     }
 
     pub fn clear_bit(&self, bit_pos: usize) {
-        assert!(bit_pos < self.data.len() * 64);
+        debug_assert!(bit_pos < self.data.len() * 64);
         let idx = bit_pos / 64;
         let bit = bit_pos % 64;
         self.data[idx].fetch_and(!(1 << bit), Ordering::SeqCst);
     }
 
     pub fn flip_bit(&self, bit_pos: usize) {
-        assert!(bit_pos < self.data.len() * 64);
+        debug_assert!(bit_pos < self.data.len() * 64);
         let idx = bit_pos / 64;
         let bit = bit_pos % 64;
         self.data[idx].fetch_xor(1 << bit, Ordering::SeqCst);
     }
 
     pub fn _test_bit(&self, bit_pos: usize) -> bool {
-        assert!(bit_pos < self.data.len() * 64);
+        debug_assert!(bit_pos < self.data.len() * 64);
         let idx = bit_pos / 64;
         let bit = bit_pos % 64;
         (self.data[idx].load(Ordering::SeqCst) & (1 << bit)) != 0

@@ -24,7 +24,7 @@ use crossbeam_utils::CachePadded;
 use static_assertions::const_assert;
 
 /// Maximum number of reader threads that this lock supports.
-const MAX_READER_THREADS: usize = 64;
+const MAX_READER_THREADS: usize = 96;
 const_assert!(MAX_READER_THREADS > 0);
 
 #[allow(clippy::declare_interior_mutable_const)]

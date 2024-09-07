@@ -605,8 +605,10 @@ where
                 .expect("Can't receive a per-thread result?");
             if intervals > 0 && intervals != core_ops.1.len() {
                 error!(
-                    "Receveived different no. of measurements from individual threads {:?}",
-                    core_ops
+                    "Receveived different no. of measurements from individual threads {:?} (got: {:?}, expected: {:?})",
+                    core_ops,
+                    core_ops.1.len(),
+                    intervals
                 );
             }
             if intervals < core_ops.1.len() {

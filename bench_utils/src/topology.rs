@@ -87,6 +87,8 @@ impl std::fmt::Debug for CpuInfo {
 #[derive(Debug)]
 pub struct MachineTopology {
     data: Vec<CpuInfo>,
+    num_nodes: usize,
+    cpus_per_node: Vec<Vec<Cpu>>,
 }
 
 impl MachineTopology {
@@ -156,7 +158,29 @@ impl MachineTopology {
             data.push(cpu_info);
         }
 
-        MachineTopology { data }
+        let mut nodes: Vec<Cpu> = data
+            .iter()
+            .map(|t| t.node.map_or_else(|| 0, |n| n.node))
+            .collect();
+        nodes.sort();
+        nodes.dedup();
+        let num_nodes = nodes.len();
+
+        let mut cpus_per_node = Vec::new();
+        for i in 0..num_nodes {
+            let cpu_infos: Vec<&CpuInfo> = data.iter().filter(|t| t.socket == (i as u64)).collect();
+            let mut cpu_ids = Vec::new();
+            for c in cpu_infos {
+                cpu_ids.push(c.cpu);
+            }
+            cpus_per_node.push(cpu_ids)
+        }
+
+        MachineTopology {
+            data,
+            num_nodes,
+            cpus_per_node,
+        }
     }
 
     /// Return how many processing units that the system has
@@ -182,8 +206,13 @@ impl MachineTopology {
         nodes
     }
 
-    pub fn cpus_on_node(&self, node: Node) -> Vec<&CpuInfo> {
-        self.data.iter().filter(|t| t.socket == node).collect()
+    pub fn num_nodes(&self) -> usize {
+        self.num_nodes
+    }
+
+    pub fn cpus_on_node(&self, node: Node) -> &Vec<Cpu> {
+        //self.data.iter().filter(|t| t.socket == node).collect()
+        &self.cpus_per_node[node as usize]
     }
 
     pub fn cpus_on_socket(&self, socket: Socket) -> Vec<&CpuInfo> {

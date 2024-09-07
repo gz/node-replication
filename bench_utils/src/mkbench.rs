@@ -9,6 +9,7 @@
 //! - `ScaleBenchBuilder`: A struct that helps to configure criterion to
 //!    evaluate the scalability of a data-structure with node-replication.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::{self};
 use std::fs::OpenOptions;
@@ -31,39 +32,54 @@ use serde::Serialize;
 pub use crate::topology::ThreadMapping;
 use crate::{benchmark::*, topology::*, Operation};
 
+thread_local! {static MY_THREAD_CORE: Cell<Option<usize>> = Cell::new(None);}
+
+/*
+TODO (if still noticable or often)
+* try changing mem only
+* fix mapping for machine topology
+*/
+
+#[inline(always)]
 fn chg_affinity(af: AffinityChange) -> usize {
     match af {
         AffinityChange::Replica(rid) => {
-            let mut cpu: usize = 0;
-            let mut node: usize = 0;
-            unsafe { nix::libc::syscall(nix::libc::SYS_getcpu, &mut cpu, &mut node, 0) };
+            let my_cpu = if MY_THREAD_CORE.get().is_none() {
+                let mut cpu: usize = 0;
+                let mut node: usize = 0;
+                unsafe { nix::libc::syscall(nix::libc::SYS_getcpu, &mut cpu, &mut node, 0) };
+                MY_THREAD_CORE.set(Some(cpu));
+                cpu
+            } else {
+                MY_THREAD_CORE.get().unwrap()
+            };
+            if my_cpu % MACHINE_TOPOLOGY.num_nodes() != rid {
+                let mut cpu_set = nix::sched::CpuSet::new();
+                for ncpu in MACHINE_TOPOLOGY.cpus_on_node(rid as u64) {
+                    debug!("ncpu is {:?}", ncpu);
+                    cpu_set
+                        .set(*ncpu as usize)
+                        .expect("Can't toggle CPU in cpu_set");
+                }
+                error!(
+                    "we are on cpu {} and should handle things for replica {} now, changing affinity to {:?}",
+                    my_cpu, rid, cpu_set
+                );
+                nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set)
+                    .expect("Can't change thread affinity");
 
-            let mut cpu_set = nix::sched::CpuSet::new();
-            trace!(
-                "cpus for node={} are {:#?}",
-                rid,
-                MACHINE_TOPOLOGY.cpus_on_node(rid as u64)
-            );
-            for ncpu in MACHINE_TOPOLOGY.cpus_on_node(rid as u64) {
-                debug!("ncpu is {:?}", ncpu);
-                cpu_set
-                    .set(ncpu.cpu as usize)
-                    .expect("Can't toggle CPU in cpu_set");
+                MY_THREAD_CORE.set(Some(rid));
             }
-            debug!(
-                "we are on cpu {} node {} and should handle things for replica {} now, changing affinity to {:?}",
-                cpu, node, rid, cpu_set
-            );
-            nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set)
-                .expect("Can't change thread affinity");
-
-            cpu as usize
+            my_cpu
         }
         AffinityChange::Revert(core_id) => {
-            let mut cpu_set = nix::sched::CpuSet::new();
-            cpu_set.set(core_id).expect("Can't toggle CPU in cpu_set");
-            nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set)
-                .expect("Can't reset thread affinity");
+            if core_id != MY_THREAD_CORE.get().unwrap() {
+                let mut cpu_set = nix::sched::CpuSet::new();
+                cpu_set.set(core_id).expect("Can't toggle CPU in cpu_set");
+                nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set)
+                    .expect("Can't reset thread affinity");
+                MY_THREAD_CORE.set(Some(core_id));
+            }
             0xdead
         }
     }

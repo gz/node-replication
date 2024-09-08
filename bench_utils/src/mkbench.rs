@@ -61,7 +61,7 @@ fn chg_affinity(af: AffinityChange) -> usize {
                         .set(*ncpu as usize)
                         .expect("Can't toggle CPU in cpu_set");
                 }
-                error!(
+                debug!(
                     "we are on cpu {} and should handle things for replica {} now, changing affinity to {:?}",
                     my_cpu, rid, cpu_set
                 );

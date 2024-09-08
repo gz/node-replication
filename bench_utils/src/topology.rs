@@ -158,10 +158,7 @@ impl MachineTopology {
             data.push(cpu_info);
         }
 
-        let mut nodes: Vec<Cpu> = data
-            .iter()
-            .map(|t| t.node.map_or_else(|| 0, |n| n.node))
-            .collect();
+        let mut nodes: Vec<Cpu> = data.iter().map(|t| t.socket).collect();
         nodes.sort();
         nodes.dedup();
         let num_nodes = nodes.len();
@@ -173,6 +170,8 @@ impl MachineTopology {
             for c in cpu_infos {
                 cpu_ids.push(c.cpu);
             }
+            cpu_ids.sort();
+            cpu_ids.dedup();
             cpus_per_node.push(cpu_ids)
         }
 

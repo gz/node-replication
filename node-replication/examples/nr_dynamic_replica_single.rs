@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! An example that dynamically varies the amount of replicas over time.
-#![feature(generic_associated_types)]
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -11,8 +10,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use node_replication::nr::Dispatch;
-use node_replication::nr::NodeReplicated;
+use nr2::nr::Dispatch;
+use nr2::nr::NodeReplicated;
 
 /// The node-replicated hashmap uses a std hashmap internally.
 #[derive(Default, Clone)]
@@ -60,7 +59,7 @@ fn main() {
     // Setup logging and some constants.
     let _r = env_logger::try_init();
 
-    const NUM_THREADS: usize = 1;
+    const NUM_THREADS: usize = 8;
 
     // We start with 4 replicas.
     let initial_replicas: NonZeroUsize = NonZeroUsize::new(4).unwrap();

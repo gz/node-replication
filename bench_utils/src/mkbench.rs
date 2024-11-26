@@ -20,6 +20,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use arr_macro::arr;
 
 use csv::WriterBuilder;
 use log::*;
@@ -33,6 +34,23 @@ pub use crate::topology::ThreadMapping;
 use crate::{benchmark::*, topology::*, Operation};
 
 thread_local! {static MY_HOME_NODE: Cell<Option<usize>> = Cell::new(None);}
+
+use lazy_static::lazy_static;
+lazy_static! {
+    /// This is an example for using doc comment attributes
+    static ref CPU_SETS: [nix::sched::CpuSet; 4] = {
+        let mut cpu_sets = arr![nix::sched::CpuSet::new(); 4];
+        for node in 0..MACHINE_TOPOLOGY.num_nodes() {
+            for ncpu in MACHINE_TOPOLOGY.cpus_on_node(node as u64) {
+                debug!("ncpu is {:?}", ncpu);
+                cpu_sets[node]
+                    .set(*ncpu as usize)
+                    .expect("Can't toggle CPU in cpu_set");
+            }
+        }
+        cpu_sets
+    };
+}
 
 /*
 TODO (if still noticable or often)
@@ -56,34 +74,20 @@ fn chg_affinity(af: AffinityChange) -> usize {
             };
         
             if my_node != rid {
-                let mut cpu_set = nix::sched::CpuSet::new();
-                for ncpu in MACHINE_TOPOLOGY.cpus_on_node(rid as u64) {
-                    debug!("ncpu is {:?}", ncpu);
-                    cpu_set
-                        .set(*ncpu as usize)
-                        .expect("Can't toggle CPU in cpu_set");
-                }
-                nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set)
+                nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &CPU_SETS[rid])
                     .expect("Can't change thread affinity");
-
                 MY_HOME_NODE.set(Some(rid));
             }
             my_node
         }
         AffinityChange::Revert(rid) => {
-            if rid != MY_HOME_NODE.get().unwrap() {
-                let mut cpu_set = nix::sched::CpuSet::new();
-                for ncpu in MACHINE_TOPOLOGY.cpus_on_node(rid as u64) {
-                    debug!("ncpu is {:?}", ncpu);
-                    cpu_set
-                        .set(*ncpu as usize)
-                        .expect("Can't toggle CPU in cpu_set");
-                }
-                nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set)
+            let current_rid = MY_HOME_NODE.get().unwrap();
+            if rid != current_rid {
+                nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &CPU_SETS[rid])
                     .expect("Can't reset thread affinity");
                 MY_HOME_NODE.set(Some(rid));
             }
-            0xdead
+            current_rid
         }
     }
 }

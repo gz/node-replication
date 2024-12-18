@@ -9,6 +9,7 @@
 //! - `ScaleBenchBuilder`: A struct that helps to configure criterion to
 //!    evaluate the scalability of a data-structure with node-replication.
 
+use arr_macro::arr;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::{self};
@@ -20,7 +21,6 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use arr_macro::arr;
 
 use csv::WriterBuilder;
 use log::*;
@@ -72,7 +72,7 @@ fn chg_affinity(af: AffinityChange) -> usize {
             } else {
                 maybe_node.unwrap()
             };
-        
+
             if my_node != rid {
                 nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &CPU_SETS[rid])
                     .expect("Can't change thread affinity");
@@ -621,6 +621,7 @@ where
     fn startup(&mut self) {
         let thread_num = self.threads();
 
+        crate::pin_thread(0); // We always start allocating with RID=0
         let start_sync = Arc::new(Barrier::new(thread_num));
         let replicas = NonZeroUsize::new(self.replicas()).unwrap();
         let ds = R::new(replicas, NonZeroUsize::new(1).unwrap(), self.log_size);
@@ -845,6 +846,7 @@ where
             }
         };
 
+        println!("MAPPINGS: {:?}", rm);
         rm
     }
 }
@@ -926,19 +928,22 @@ where
 
         let sockets = topology.sockets();
         let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
-        let step_size = cores_on_s0.len() / 4;
-        for t in (0..(max_cores + 1)).step_by(step_size) {
-            if t == 0 {
-                // Can't run on 0 threads
-                self.threads(t + 1);
+        let cores_per_socket = cores_on_s0.len();
+
+        let mut current_core = 0;
+        while current_core <= 96 {
+            if current_core == 0 {
+                self.threads(current_core + 1);
             } else {
-                if t <= 96 {
-                    self.threads(t);
-                }
+                self.threads(current_core);
+            }
+            current_core += 2;
+            if current_core / cores_per_socket == 3 {
+                current_core += 1;
             }
         }
-
         self.threads.sort();
+        println!("THREADS: {:?}", self.threads);
         self
     }
 

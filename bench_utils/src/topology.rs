@@ -234,10 +234,20 @@ impl MachineTopology {
         match strategy {
             ThreadMapping::None => v,
             ThreadMapping::Interleave => {
-                let num_sockets = how_many / 24;
+                let mut cores_on_s0 = self.cpus_on_socket(0);
+                // Remove hyperthreading
+                cores_on_s0.dedup_by(|a, b| a.core == b.core);
+                let cores_per_socket = cores_on_s0.len();
+
+                let num_sockets = how_many.div_ceil(cores_per_socket);
+                if how_many % num_sockets != 0 {
+                    panic!("Number of cores given does not divide evenly across sockets");
+                }
+                let per_socket = how_many / num_sockets;
+
                 let mut all_cores = Vec::new();
 
-                for sock in 0..(num_sockets + 1) {
+                for sock in 0..num_sockets {
                     let mut ht1 = self.cpus_on_socket(sock as Node);
                     // Get cores first, remove HT
                     ht1.sort_by_key(|c| c.core);
@@ -253,14 +263,6 @@ impl MachineTopology {
                     ht2.sort_by_key(|c| c.core);
                     ht1.extend(ht2);
 
-                    let mut per_socket = if num_sockets == 0 {
-                        how_many
-                    } else {
-                        how_many / num_sockets
-                    };
-                    if how_many % per_socket > sock {
-                        per_socket += 1;
-                    }
                     //cpus.dedup_by(|a, b| a.core == b.core);
                     for cpu in ht1.iter().take(per_socket) {
                         all_cores.push(*cpu);

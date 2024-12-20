@@ -186,8 +186,12 @@ impl MachineTopology {
         self.data.iter().filter(|t| t.socket == node).collect()
     }
 
-    pub fn cpus_on_socket(&self, socket: Socket) -> Vec<&CpuInfo> {
-        self.data.iter().filter(|t| t.socket == socket).collect()
+    pub fn cpus_on_socket(&self, socket: Socket) -> Vec<CpuInfo> {
+        self.data
+            .iter()
+            .filter(|t| t.socket == socket)
+            .map(|c| *c)
+            .collect()
     }
 
     pub fn allocate(&self, strategy: ThreadMapping, how_many: usize, use_ht: bool) -> Vec<CpuInfo> {
@@ -202,24 +206,41 @@ impl MachineTopology {
         match strategy {
             ThreadMapping::None => v,
             ThreadMapping::Interleave => {
-                let mut ht1 = cpus.clone();
-                // Get cores first, remove HT
-                ht1.sort_by_key(|c| c.core);
-                ht1.dedup_by(|a, b| a.core == b.core);
+                let mut cores_on_s0 = self.cpus_on_socket(0);
+                // Remove hyperthreading
+                cores_on_s0.dedup_by(|a, b| a.core == b.core);
+                let cores_per_socket = cores_on_s0.len();
 
-                // Add the HTs removed by dedup at the end
-                let mut ht2 = vec![];
-                for cpu in cpus {
-                    if !ht1.contains(&cpu) {
-                        ht2.push(cpu);
+                let num_sockets = how_many.div_ceil(cores_per_socket);
+                if how_many % num_sockets != 0 {
+                    panic!("Number of cores given does not divide evenly across sockets");
+                }
+                let per_socket = how_many / num_sockets;
+
+                let mut all_cores = Vec::new();
+
+                for sock in 0..num_sockets {
+                    let mut ht1 = self.cpus_on_socket(sock as Node);
+                    // Get cores first, remove HT
+                    ht1.sort_by_key(|c| c.core);
+                    ht1.dedup_by(|a, b| a.core == b.core);
+
+                    // Add the HTs removed by dedup at the end
+                    let mut ht2 = vec![];
+                    for cpu in &cpus {
+                        if !ht1.contains(&cpu) {
+                            ht2.push(cpu);
+                        }
+                    }
+                    ht2.sort_by_key(|c| c.core);
+                    ht1.extend(ht2);
+
+                    //cpus.dedup_by(|a, b| a.core == b.core);
+                    for cpu in ht1.iter().take(per_socket) {
+                        all_cores.push(*cpu);
                     }
                 }
-                ht2.sort_by_key(|c| c.core);
-                ht1.extend(ht2);
-
-                //cpus.dedup_by(|a, b| a.core == b.core);
-                let c = ht1.iter().take(how_many).map(|c| *c).collect();
-                c
+                all_cores
             }
             ThreadMapping::Sequential => {
                 cpus.sort_by(|a, b| {

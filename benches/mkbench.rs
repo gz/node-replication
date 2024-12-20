@@ -985,6 +985,7 @@ where
             }
         };
 
+        println!("MAPPINGS: {:?}", rm);
         rm
     }
 }
@@ -1069,23 +1070,26 @@ where
 
     pub fn thread_defaults(&mut self) -> &mut Self {
         let topology = MachineTopology::new();
-        let max_cores = topology.cores();
-
         let sockets = topology.sockets();
-        let cores_on_s0 = topology.cpus_on_socket(sockets[0]);
-        let step_size = cores_on_s0.len() / 4;
-        for t in (0..(max_cores + 1)).step_by(step_size) {
-            if t == 0 {
-                // Can't run on 0 threads
-                self.threads(t + 1);
+        let mut cores_on_s0 = topology.cpus_on_socket(sockets[0]);
+        // Remove hyperthreading
+        cores_on_s0.dedup_by(|a, b| a.core == b.core);
+        let cores_per_socket = cores_on_s0.len();
+
+        let mut current_core = 0;
+        while current_core <= cores_per_socket * sockets.len() {
+            if current_core == 0 {
+                self.threads(current_core + 1);
             } else {
-                if (t <= 96) {
-                    self.threads(t);
-                }
+                self.threads(current_core);
+            }
+            current_core += 2;
+            while current_core % current_core.div_ceil(cores_per_socket) != 0 {
+                current_core += 1;
             }
         }
-
         self.threads.sort();
+        println!("THREADS: {:?}", self.threads);
         self
     }
 

@@ -10,7 +10,7 @@ use std::marker::Sync;
 
 use logging::warn;
 use rand::seq::SliceRandom;
-use rand::{distributions::Distribution, Rng, RngCore};
+use rand::{distributions::Distribution, rngs::StdRng, Rng, RngCore, SeedableRng};
 use zipf::ZipfDistribution;
 
 use bench_utils::benchmark::*;
@@ -132,11 +132,18 @@ pub fn generate_operations(
     distribution: &'static str,
 ) -> Vec<Operation<OpRd, OpWr>> {
     assert!(distribution == "skewed" || distribution == "uniform");
+    let seed = [
+        0xddu8, 0x85u8, 0x1bu8, 0x46u8, 0xb1u8, 0x29u8, 0x1cu8, 0xd7u8, 0x1du8, 0xe2u8, 0x32u8,
+        0x9eu8, 0x53u8, 0x71u8, 0xbcu8, 0x70u8, 0x7au8, 0x4cu8, 0xc5u8, 0xfcu8, 0xbbu8, 0xf1u8,
+        0x67u8, 0x4du8, 0x70u8, 0x68u8, 0x89u8, 0xf0u8, 0xb6u8, 0xe9u8, 0xb2u8, 0x76u8,
+    ];
 
     let mut ops = Vec::with_capacity(nop);
+    let mut num_writes = 0;
 
     let skewed = distribution == "skewed";
-    let mut t_rng = rand::thread_rng();
+    //let mut t_rng = rand::thread_rng(seed);
+    let mut t_rng = StdRng::from_seed(seed);
     let zipf = ZipfDistribution::new(span, 1.03).unwrap();
 
     for idx in 0..nop {
@@ -149,11 +156,12 @@ pub fn generate_operations(
 
         if idx % 100 < write_ratio {
             ops.push(Operation::WriteOperation(OpWr::Put(id, t_rng.next_u64())));
+            num_writes += 1;
         } else {
             ops.push(Operation::ReadOperation(OpRd::Get(id)));
         }
     }
-
+    println!("Distribution is: {distribution}, span is: {span}, nop is: {nop}, num_writes is: {num_writes}, seed is: {seed:?}");
     ops.shuffle(&mut t_rng);
     ops
 }
@@ -326,7 +334,7 @@ fn main() {
     } else if cfg!(feature = "smokebench") {
         vec![0, 10, 100]
     } else {
-        vec![0, 10, 80]
+        vec![10, 80]
     };
 
     unsafe {

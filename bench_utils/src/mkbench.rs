@@ -30,10 +30,12 @@ use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::Serialize;
 
+use crate::mkbench;
 pub use crate::topology::ThreadMapping;
 use crate::{benchmark::*, topology::*, Operation};
 
-thread_local! {static MY_HOME_NODE: Cell<Option<usize>> = Cell::new(None);}
+thread_local!(static MY_HOME_NODE: Cell<Option<usize>> = Cell::new(None));
+thread_local!(static MY_AFFINITY_CHANGE_COUNT: Cell<usize> = Cell::new(0));
 
 use lazy_static::lazy_static;
 lazy_static! {
@@ -74,6 +76,7 @@ fn chg_affinity(af: AffinityChange) -> usize {
             };
 
             if my_node != rid {
+                MY_AFFINITY_CHANGE_COUNT.set(MY_AFFINITY_CHANGE_COUNT.get() + 1);
                 nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &CPU_SETS[rid])
                     .expect("Can't change thread affinity");
                 MY_HOME_NODE.set(Some(rid));
@@ -83,6 +86,7 @@ fn chg_affinity(af: AffinityChange) -> usize {
         AffinityChange::Revert(rid) => {
             let current_rid = MY_HOME_NODE.get().unwrap();
             if rid != current_rid {
+                MY_AFFINITY_CHANGE_COUNT.set(MY_AFFINITY_CHANGE_COUNT.get() + 1);
                 nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &CPU_SETS[rid])
                     .expect("Can't reset thread affinity");
                 MY_HOME_NODE.set(Some(rid));
@@ -670,6 +674,9 @@ where
                             urcu_sys::rcu_register_thread();
                         }
                     }
+                    let mut start_cpu: usize = 0;
+                    let mut start_node: usize = 0;
+                    unsafe { nix::libc::syscall(nix::libc::SYS_getcpu, &mut start_cpu, &mut start_node, 0) };
 
                     debug!(
                         "Running {:?} on core {} replica#{} rtoken#{:?} for {:?}",
@@ -712,15 +719,26 @@ where
                         }
                     }
 
-                    debug!(
-                        "Completed {:?} on core {} replica#{} rtoken#{:?} did {} ops in {:?}",
-                        thread::current().id(),
-                        core_id,
-                        rid,
-                        thread_token,
-                        operations_completed,
-                        duration
-                    );
+                    let mut final_cpu: usize = 0;
+                    let mut final_node: usize = 0;
+                    unsafe { nix::libc::syscall(nix::libc::SYS_getcpu, &mut final_cpu, &mut final_node, 0) };
+
+                    if start_cpu != final_cpu || start_node != final_node {
+                        println!(
+                            "Completed {:?} on core {} replica#{} rtoken#{:?} did {} ops in {:?} -- AFFINITY CHANGES {:?} (affinity_core={}, affinity_node={})=>(affinity_core={}, affinity_node={})",
+                            thread::current().id(),
+                            core_id,
+                            rid,
+                            thread_token,
+                            operations_completed,
+                            duration,
+                            mkbench::MY_AFFINITY_CHANGE_COUNT.get(),
+                            start_cpu,
+                            start_node,
+                            final_cpu,
+                            final_node,
+                        );
+                    }
 
                     if name.starts_with("urcu") {
                         unsafe {

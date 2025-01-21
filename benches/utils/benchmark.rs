@@ -162,7 +162,7 @@ impl Default for TestHarness {
         if cfg!(feature = "smokebench") {
             TestHarness::new(Duration::from_millis(500))
         } else {
-            TestHarness::new(Duration::from_secs(5))
+            TestHarness::new(Duration::from_secs(10))
         }
     }
 }

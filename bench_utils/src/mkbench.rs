@@ -30,12 +30,14 @@ use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use serde::Serialize;
 
-use crate::mkbench;
 pub use crate::topology::ThreadMapping;
 use crate::{benchmark::*, topology::*, Operation};
 
+const NUM_NUMA: usize = 4;
+
 thread_local!(static MY_HOME_NODE: Cell<Option<usize>> = Cell::new(None));
-thread_local!(static MY_AFFINITY_CHANGE_COUNT: Cell<usize> = Cell::new(0));
+thread_local!(static MY_HOME_CPU: Cell<Option<usize>> = Cell::new(None));
+//thread_local!(static MY_AFFINITY_CHANGE_COUNT: Cell<usize> = Cell::new(0));
 
 use lazy_static::lazy_static;
 lazy_static! {
@@ -70,13 +72,14 @@ fn chg_affinity(af: AffinityChange) -> usize {
                 let mut node: usize = 0;
                 unsafe { nix::libc::syscall(nix::libc::SYS_getcpu, &mut cpu, &mut node, 0) };
                 MY_HOME_NODE.set(Some(node));
+                MY_HOME_CPU.set(Some(cpu));
                 node
             } else {
                 maybe_node.unwrap()
             };
 
             if my_node != rid {
-                MY_AFFINITY_CHANGE_COUNT.set(MY_AFFINITY_CHANGE_COUNT.get() + 1);
+                //MY_AFFINITY_CHANGE_COUNT.set(MY_AFFINITY_CHANGE_COUNT.get() + 1);
                 nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &CPU_SETS[rid])
                     .expect("Can't change thread affinity");
                 MY_HOME_NODE.set(Some(rid));
@@ -86,9 +89,14 @@ fn chg_affinity(af: AffinityChange) -> usize {
         AffinityChange::Revert(rid) => {
             let current_rid = MY_HOME_NODE.get().unwrap();
             if rid != current_rid {
-                MY_AFFINITY_CHANGE_COUNT.set(MY_AFFINITY_CHANGE_COUNT.get() + 1);
-                nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &CPU_SETS[rid])
-                    .expect("Can't reset thread affinity");
+                //MY_AFFINITY_CHANGE_COUNT.set(MY_AFFINITY_CHANGE_COUNT.get() + 1);
+                let orig_cpu = MY_HOME_CPU.get().unwrap();
+                if orig_cpu % NUM_NUMA == rid {
+                    crate::pin_thread(orig_cpu as u64);
+                } else {
+                    nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &CPU_SETS[rid])
+                        .expect("Can't reset thread affinity");
+                }
                 MY_HOME_NODE.set(Some(rid));
             }
             current_rid
@@ -660,7 +668,7 @@ where
                     }
                     nix::sched::sched_setaffinity(nix::unistd::Pid::from_raw(0), &cpu_set)
                         .expect("Can't change thread affinity");
-                    //crate::pin_thread(core_id);
+                    crate::pin_thread(core_id);
 
                     let thread_token = ds
                         .register(rid)
@@ -725,14 +733,13 @@ where
 
                     if start_cpu != final_cpu || start_node != final_node {
                         println!(
-                            "Completed {:?} on core {} replica#{} rtoken#{:?} did {} ops in {:?} -- AFFINITY CHANGES {:?} (affinity_core={}, affinity_node={})=>(affinity_core={}, affinity_node={})",
+                            "Completed {:?} on core {} replica#{} rtoken#{:?} did {} ops in {:?} -- AFFINITY CHANGES (affinity_core={}, affinity_node={})=>(affinity_core={}, affinity_node={})",
                             thread::current().id(),
                             core_id,
                             rid,
                             thread_token,
                             operations_completed,
                             duration,
-                            mkbench::MY_AFFINITY_CHANGE_COUNT.get(),
                             start_cpu,
                             start_node,
                             final_cpu,

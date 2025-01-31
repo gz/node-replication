@@ -967,6 +967,8 @@ pub(crate) mod test {
     // Tests that we can successfully allow operations to go pending on this replica.
     #[test]
     fn test_replica_make_pending() {
+        use std::vec;
+
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
         let lt = slog.register().unwrap();
         let repl = Replica::<Data>::new(lt);
@@ -1038,7 +1040,9 @@ pub(crate) mod test {
         assert_eq!(repl.data.read(0).junk, 0);
         assert_eq!(repl.contexts[0].res(), None);
     }
+    */
 
+    /*
     // Tests whether we can execute an operation against the log using execute_mut().
     #[test]
     fn test_replica_execute_combine() {
@@ -1050,7 +1054,9 @@ pub(crate) mod test {
         assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx).unwrap());
         assert_eq!(1, repl.data.read(0).junk);
     }
+    */
 
+    /*
     // Tests whether get_response() retrieves a response to an operation that was executed
     // against a replica.
     #[test]
@@ -1064,6 +1070,10 @@ pub(crate) mod test {
 
         assert_eq!(repl.get_response(&slog, 1).unwrap(), Ok(107));
     }
+    */
+
+    /*
+    // TODO(erika): context iterator needed for execute and execute_mut ops
 
     // Tests whether we can issue a read-only operation against the replica.
     #[test]

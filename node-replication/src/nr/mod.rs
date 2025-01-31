@@ -1099,9 +1099,9 @@ mod test {
         let replicas = NonZeroUsize::new(1).unwrap();
         let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
         assert_eq!(async_ds.replicas.len(), 1);
-        let _ = async_ds.add_replica(1);
+        let _ = async_ds.add_replica(1).unwrap();
         assert_eq!(async_ds.replicas.len(), 2);
-        let _ = async_ds.add_replica(2);
+        let _ = async_ds.add_replica(2).unwrap();
         assert_eq!(async_ds.replicas.len(), 3);
     }
 
@@ -1111,87 +1111,90 @@ mod test {
         let replicas = NonZeroUsize::new(1).unwrap();
         let mut ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
         for i in 0..MAX_REPLICAS_PER_LOG {
-            let _ = ds.add_replica(i);
+            let _ = ds.add_replica(i).unwrap();
         }
         let _ = ds.add_replica(MAX_REPLICAS_PER_LOG);
     }
 
-    /*
-        #[test]
-        fn test_add_replica_syncs_replica_data() {
-            let replicas = NonZeroUsize::new(1).unwrap();
-            let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+    #[test]
+    fn test_add_replica_syncs_replica_data() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
 
-            let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
 
-            //add a few iterations of log entries
-            let _ = async_ds.execute_mut(1, ttkn_a);
-            let _ = async_ds.execute_mut(5, ttkn_a);
-            let _ = async_ds.execute_mut(2, ttkn_a);
+        //add a few iterations of log entries
+        let _ = async_ds.execute_mut(1, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(5, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(2, ttkn_a).unwrap();
 
-            let added_replica = async_ds.add_replica().unwrap();
+        async_ds.add_replica(1).unwrap();
+        let added_replica_data = async_ds.replicas[&1].data.read(0).junk;
 
-            let added_replica_data = async_ds.replicas[&added_replica.rid].data.read(0).junk;
+        assert_eq!(3, added_replica_data);
+    }
 
-            assert_eq!(3, added_replica_data);
-        }
+    #[test]
+    fn test_add_replica_syncs_replica_lmask() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
 
-        #[test]
-        fn test_add_replica_syncs_replica_lmask() {
-            let replicas = NonZeroUsize::new(1).unwrap();
-            let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+        //add a few iterations of log entries
+        let _ = async_ds.execute_mut(1, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(5, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(2, ttkn_a).unwrap();
 
-            let ttkn_a = async_ds.register(0).expect("Unable to register with log");
-            //add a few iterations of log entries
-            let _ = async_ds.execute_mut(1, ttkn_a);
-            let _ = async_ds.execute_mut(5, ttkn_a);
-            let _ = async_ds.execute_mut(2, ttkn_a);
+        let replica_lmask = async_ds.log.lmasks[0].get();
+        async_ds.add_replica(1).unwrap();
+        let added_replica_lmask = async_ds.log.lmasks[1].get();
+        assert_eq!(replica_lmask, added_replica_lmask);
+    }
 
-            let replica_lmask = async_ds.log.lmasks[&0].get();
-            let added_replica = async_ds.add_replica().unwrap();
-            let added_replica_lmask = async_ds.log.lmasks[&added_replica.rid].get();
-            assert_eq!(replica_lmask, added_replica_lmask);
-        }
+    #[test]
+    fn test_add_replica_syncs_replica_ltail() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
 
-        #[test]
-        fn test_add_replica_syncs_replica_ltail() {
-            let replicas = NonZeroUsize::new(1).unwrap();
-            let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
 
-            let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+        //add a few iterations of log entries
+        let _ = async_ds.execute_mut(1, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(5, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(2, ttkn_a).unwrap();
 
-            //add a few iterations of log entries
-            let _ = async_ds.execute_mut(1, ttkn_a);
-            let _ = async_ds.execute_mut(5, ttkn_a);
-            let _ = async_ds.execute_mut(2, ttkn_a);
+        let replica_ltails = async_ds.log.ltails[0].load(Ordering::Relaxed);
+        async_ds.add_replica(1).unwrap();
+        let added_replica_ltails = async_ds.log.ltails[1].load(Ordering::Relaxed);
+        assert_eq!(replica_ltails, added_replica_ltails);
+    }
 
-            let replica_ltails = async_ds.log.ltails[&0].load(Ordering::Relaxed);
-            let added_replica = async_ds.add_replica().unwrap();
-            let added_replica_ltails = async_ds.log.ltails[&added_replica.rid].load(Ordering::Relaxed);
-            assert_eq!(replica_ltails, added_replica_ltails);
-        }
+    #[test]
+    fn test_replica_counts() {
+        let replicas = NonZeroUsize::new(4).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        assert_eq!(async_ds.replicas.len(), 4);
 
-        #[test]
-        fn test_add_replica_adds_replicas_in_order() {
-            let replicas = NonZeroUsize::new(4).unwrap();
-            let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
-            let ttkn_a = async_ds.register(0).expect("Unable to register with log");
-            let ttkn_b = async_ds.register(1).expect("Unable to register with log");
-            let ttkn_c = async_ds.register(2).expect("Unable to register with log");
-            let _ttkn_d = async_ds.register(3).expect("Unable to register with log");
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+        let ttkn_b = async_ds.register(1).expect("Unable to register with log");
+        let ttkn_c = async_ds.register(2).expect("Unable to register with log");
+        let _ttkn_d = async_ds.register(3).expect("Unable to register with log");
 
-            let _ = async_ds.execute_mut(1, ttkn_a);
-            let _ = async_ds.execute_mut(5, ttkn_b);
-            let _ = async_ds.execute_mut(2, ttkn_c);
+        let _ = async_ds.execute_mut(1, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(5, ttkn_b).unwrap();
+        let _ = async_ds.execute_mut(2, ttkn_c).unwrap();
 
-            let _ = async_ds.remove_replica(1);
-            let _ = async_ds.remove_replica(2);
+        let ret = async_ds.remove_replica(1).unwrap();
+        assert_eq!(ret, 1);
+        assert_eq!(async_ds.replicas.len(), 3);
+        let ret = async_ds.remove_replica(2).unwrap();
+        assert_eq!(async_ds.replicas.len(), 2);
+        assert_eq!(ret, 2);
 
-            let added_replica_four = async_ds.add_replica().unwrap();
+        async_ds.add_replica(4).unwrap();
+        assert_eq!(async_ds.replicas.len(), 3);
+    }
 
-            assert_eq!(added_replica_four.rid, 4);
-        }
-    */
     #[test]
     fn test_remove_replica_returns_replica_id() {
         let replicas = NonZeroUsize::new(1).unwrap();
@@ -1208,51 +1211,90 @@ mod test {
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
         let ttkn_b = async_ds.register(1).expect("Unable to register with log");
 
-        let _ = async_ds.execute_mut(1, ttkn_a);
-        let _ = async_ds.execute_mut(4, ttkn_b);
+        let _ = async_ds.execute_mut(1, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(4, ttkn_b).unwrap();
 
-        let _ = async_ds.remove_replica(15);
-
+        assert_eq!(async_ds.replicas.len(), 2);
+        let ret = async_ds.remove_replica(15);
+        assert!(!ret.is_ok());
         assert_eq!(async_ds.replicas.len(), 2);
     }
 
-    /*
-       #[test]
-       fn test_remove_replica_syncs_replica_data() {
-           let replicas = NonZeroUsize::new(1).unwrap();
-           let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
-
-           let ttkn_a = async_ds.register(0).expect("Unable to register with log");
-
-           //add a few iterations of log entries
-           let _ = async_ds.execute_mut(1, ttkn_a);
-           let _ = async_ds.execute_mut(5, ttkn_a);
-           let _ = async_ds.execute_mut(2, ttkn_a);
-
-           let added_replica = async_ds.add_replica().unwrap();
-
-           let _ = async_ds.remove_replica(0);
-           let _ = async_ds.execute_mut(5, added_replica);
-
-           let added_replica_data = async_ds.replicas[&added_replica.rid].data.read(0).junk;
-           assert_eq!(4, added_replica_data);
-       }
-    */
+    // TODO(erika): Hangs forever
+    #[ignore]
     #[test]
-    fn test_remove_replica_() {
-        let replicas = NonZeroUsize::new(2).unwrap();
+    fn test_remove_replica_syncs_replica_data1() {
+        let replicas = NonZeroUsize::new(1).unwrap();
         let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+        //add a few iterations of log entries
+        let _ = async_ds.execute_mut(1, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(5, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(2, ttkn_a).unwrap();
+
+        async_ds.add_replica(1).unwrap();
+
+        let ret = async_ds.remove_replica(0).unwrap();
+        assert_eq!(ret, 0);
+        let _ = async_ds.execute_mut(5, ttkn_a).unwrap();
+
+        let added_replica_data = async_ds.replicas[&1].data.read(0).junk;
+        assert_eq!(4, added_replica_data);
+    }
+
+    // TODO(erika): fails
+    #[ignore]
+    #[test]
+    fn test_remove_replica_syncs_replica_data2() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+        //add a few iterations of log entries
+        let _ = async_ds.execute_mut(1, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(5, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(2, ttkn_a).unwrap();
+
+        async_ds.add_replica(1).unwrap();
         let ttkn_b = async_ds.register(1).expect("Unable to register with log");
 
-        let _ = async_ds.execute_mut(1, ttkn_a);
-        let _ = async_ds.execute_mut(4, ttkn_b);
+        let ret = async_ds.remove_replica(0).unwrap();
+        assert_eq!(ret, 0);
+        let _ = async_ds.execute_mut(5, ttkn_b).unwrap();
 
-        let _ = async_ds.remove_replica(15);
-
-        assert_eq!(async_ds.replicas.len(), 2);
+        let added_replica_data = async_ds.replicas[&1].data.read(0).junk;
+        assert_eq!(4, added_replica_data);
     }
 
+    // TODO(erika): This fails.
+    #[ignore]
+    #[test]
+    fn test_remove_replica_syncs_replica_data3() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+        //add a few iterations of log entries
+        let _ = async_ds.execute_mut(1, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(5, ttkn_a).unwrap();
+        let _ = async_ds.execute_mut(2, ttkn_a).unwrap();
+
+        async_ds.add_replica(1).unwrap();
+        let ret = async_ds.remove_replica(0).unwrap();
+        assert_eq!(ret, 0);
+
+        let ttkn_b = async_ds.register(1).expect("Unable to register with log");
+        let _ = async_ds.execute_mut(5, ttkn_b).unwrap();
+
+        let added_replica_data = async_ds.replicas[&1].data.read(0).junk;
+        assert_eq!(4, added_replica_data);
+    }
+
+    // TODO(erika) - any specifics on which operations these were?
     // Check Lock before removing
     // Check replica integrity after deletion
 }

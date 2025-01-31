@@ -128,11 +128,11 @@ where
     /// Stores the index of the thread currently doing flat combining. Field is
     /// zero if there isn't any thread actively performing flat-combining.
     /// Atomic since this acts as the combiner lock.
-    combiner: CachePadded<AtomicUsize>,
+    pub(crate) combiner: CachePadded<AtomicUsize>,
 
     /// Thread index that will be handed out to the next thread that registers
     /// with the replica when calling [`Replica::register()`].
-    next: CachePadded<AtomicUsize>,
+    pub(crate) next: CachePadded<AtomicUsize>,
 
     /// A buffer of operations for flat combining.
     ///
@@ -962,147 +962,4 @@ pub(crate) mod test {
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
         assert!(repl.register().is_none());
     }
-
-    /*
-    // Tests that we can successfully allow operations to go pending on this replica.
-    #[test]
-    fn test_replica_make_pending() {
-        use std::vec;
-
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
-        let mut o = vec![];
-        assert!(repl.make_pending(121, 8));
-        let ctxt_iter = repl.contexts[7].iter();
-        assert_eq!(ctxt_iter.len(), 1);
-        o.extend(ctxt_iter.map(|o| o.0));
-        assert_eq!(o.len(), 1);
-        assert_eq!(o[0], 121);
-    }
-
-    // Tests that we can't pend operations on a context that is already full of operations.
-    #[test]
-    fn test_replica_make_pending_false() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
-        for _i in 0..Context::<u64, Result<u64, ()>>::batch_size() {
-            assert!(repl.make_pending(121, 1))
-        }
-
-        assert!(!repl.make_pending(11, 1));
-    }
-
-    // Tests that we can append and execute operations using try_combine().
-    #[test]
-    fn test_replica_try_combine() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
-        let _idx = repl.register();
-
-        repl.make_pending(121, 1);
-        assert!(repl.try_combine(&slog).is_ok());
-
-        assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
-        assert_eq!(repl.data.read(0).junk, 1);
-        assert_eq!(repl.contexts[0].res(), Some(Ok(107)));
-    }
-
-    // Tests whether try_combine() also applies pending operations on other threads to the log.
-    #[test]
-    fn test_replica_try_combine_pending() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
-
-        repl.next.store(9, Ordering::SeqCst);
-        repl.make_pending(121, 8);
-        assert!(repl.try_combine(&slog).is_ok());
-
-        assert_eq!(repl.data.read(0).junk, 1);
-        assert_eq!(repl.contexts[7].res(), Some(Ok(107)));
-    }
-
-    // Tests whether try_combine() fails if someone else is currently flat combining.
-    #[test]
-    fn test_replica_try_combine_fail() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
-
-        repl.next.store(9, Ordering::SeqCst);
-        repl.combiner.store(8, Ordering::SeqCst);
-        repl.make_pending(121, 1);
-        assert!(repl.try_combine(&slog).is_ok());
-
-        assert_eq!(repl.data.read(0).junk, 0);
-        assert_eq!(repl.contexts[0].res(), None);
-    }
-    */
-
-    /*
-    // Tests whether we can execute an operation against the log using execute_mut().
-    #[test]
-    fn test_replica_execute_combine() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
-        let idx = repl.register().unwrap();
-
-        assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx).unwrap());
-        assert_eq!(1, repl.data.read(0).junk);
-    }
-    */
-
-    /*
-    // Tests whether get_response() retrieves a response to an operation that was executed
-    // against a replica.
-    #[test]
-    fn test_replica_get_response() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
-        let _idx = repl.register();
-
-        repl.make_pending(121, 1);
-
-        assert_eq!(repl.get_response(&slog, 1).unwrap(), Ok(107));
-    }
-    */
-
-    /*
-    // TODO(erika): context iterator needed for execute and execute_mut ops
-
-    // Tests whether we can issue a read-only operation against the replica.
-    #[test]
-    fn test_replica_execute() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
-        let idx = repl.register().expect("Failed to register with replica.");
-
-        assert_eq!(Ok(107), repl.execute_mut(&slog, 121, idx).unwrap());
-        assert_eq!(Ok(1), repl.execute(&slog, 11, idx).unwrap());
-    }
-
-    // Tests that execute() syncs up the replica with the log before
-    // executing the read against the data structure.
-    #[test]
-    fn test_replica_execute_not_synced() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
-
-        let lt = slog.register().unwrap();
-        // Add in operations to the log off the side, not through the replica.
-        let o = [121, 212];
-        assert!(slog.append(&o, &lt, |_o, _mine| {}).is_ok());
-        slog.exec(&lt, &mut |_o, _mine| {});
-
-        let t1 = repl.register().expect("Failed to register with replica.");
-        assert_eq!(Ok(2), repl.execute(&slog, 11, t1).unwrap());
-    }
-    */
 }

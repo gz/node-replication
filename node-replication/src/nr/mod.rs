@@ -69,7 +69,6 @@
 //!    }
 //! }
 //! ```
-
 use alloc::collections::BTreeMap;
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt::Debug;
@@ -413,12 +412,11 @@ where
         log_size: usize,
     ) -> Result<Self, NodeReplicatedError> {
         assert!(num_replicas.get() <= MAX_REPLICAS_PER_LOG);
-        let max_replicas = num_replicas.get();
         let affinity_mngr = AffinityManager::new(Box::try_new(chg_mem_affinity)?);
         let log = Log::new_with_bytes(log_size, ());
 
-        let mut contexts = Vec::with_capacity(max_replicas * MAX_THREADS_PER_REPLICA);
-        for _idx in 0..(max_replicas * MAX_THREADS_PER_REPLICA) {
+        let mut contexts = Vec::with_capacity(MAX_REPLICAS_PER_LOG * MAX_THREADS_PER_REPLICA);
+        for _idx in 0..(MAX_REPLICAS_PER_LOG * MAX_THREADS_PER_REPLICA) {
             contexts.push(Default::default());
         }
 
@@ -670,6 +668,7 @@ where
     ) -> <D as Dispatch>::Response {
         //logging::info!("execute mut on {:?}", tkn);
         let _aftkn = self.affinity_mngr.switch(tkn.rid);
+
         while !self.make_pending(op.clone(), tkn.gtid()) {}
 
         /// An enum to keep track of a stack of operations we should do on Replicas.
@@ -951,6 +950,9 @@ where
     fn try_combine(&self, tkn: ThreadToken) -> Result<(), ReplicaError<D>> {
         let rid = self.select_replica(tkn);
         let contexts = self.context_iterator(rid);
+        if rid != tkn.rid {
+            contexts.active_threads.set_bit(tkn.gtid());
+        }
         self.replicas[&rid].try_combine(&self.log, contexts)
     }
 
@@ -966,33 +968,6 @@ pub(crate) struct ContextIterator<'a, D: Dispatch> {
     contexts: &'a Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
     active_threads: AtomicBitmap,
 }
-
-/*impl<'a, D: Dispatch> ContextIterator<'a, D> {
-    fn context_to_replica(&self, rid: usize, tid: usize) -> ReplicaId {
-        let replicas = self.active_replicas;
-        //logging::info!("replicas: {:b}", replicas);
-        //logging::info!("replicas: {:b} {rid}", replicas);
-
-        if ((1 << rid) & replicas) > 0 {
-            // Use the replica where the thread originally registered with if it
-            // exists
-            rid
-        } else {
-            let key_idx = tid % (replicas.count_ones() as usize);
-            let mut replicas = replicas;
-            let mut idx = 0;
-            let mut replica_idx = 0;
-
-            while idx <= key_idx {
-                replica_idx += replicas.trailing_zeros();
-                replicas <<= replicas.trailing_zeros() + 1;
-                idx += 1;
-            }
-
-            replica_idx as usize
-        }
-    }
-}*/
 
 impl<'a, D: Dispatch> core::iter::Iterator for ContextIterator<'a, D> {
     type Item = &'a Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>;
@@ -1220,8 +1195,6 @@ mod test {
         assert_eq!(async_ds.replicas.len(), 2);
     }
 
-    // TODO(erika): Hangs forever
-    #[ignore]
     #[test]
     fn test_remove_replica_syncs_replica_data1() {
         let replicas = NonZeroUsize::new(1).unwrap();
@@ -1244,8 +1217,6 @@ mod test {
         assert_eq!(4, added_replica_data);
     }
 
-    // TODO(erika): fails
-    #[ignore]
     #[test]
     fn test_remove_replica_syncs_replica_data2() {
         let replicas = NonZeroUsize::new(1).unwrap();
@@ -1264,13 +1235,10 @@ mod test {
         let ret = async_ds.remove_replica(0).unwrap();
         assert_eq!(ret, 0);
         let _ = async_ds.execute_mut(5, ttkn_b).unwrap();
-
         let added_replica_data = async_ds.replicas[&1].data.read(0).junk;
         assert_eq!(4, added_replica_data);
     }
 
-    // TODO(erika): This fails.
-    #[ignore]
     #[test]
     fn test_remove_replica_syncs_replica_data3() {
         let replicas = NonZeroUsize::new(1).unwrap();
@@ -1293,6 +1261,149 @@ mod test {
         let added_replica_data = async_ds.replicas[&1].data.read(0).junk;
         assert_eq!(4, added_replica_data);
     }
+
+    // Tests that we can successfully allow operations to go pending on this replica.
+    #[test]
+    fn test_replica_make_pending() {
+        use std::vec;
+
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+        let gtid = ttkn_a.gtid();
+
+        let mut o = vec![];
+        assert!(async_ds.make_pending(121, gtid));
+        let ctxt_iter = async_ds.contexts[gtid].iter();
+        assert_eq!(ctxt_iter.len(), 1);
+        o.extend(ctxt_iter.map(|o| o.0));
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0], 121);
+    }
+
+    // Tests that we can't pend operations on a context that is already full of operations.
+    #[test]
+    fn test_replica_make_pending_false() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+        let gtid = ttkn_a.gtid();
+
+        for _i in 0..Context::<u64, Result<u64, ()>>::batch_size() {
+            assert!(async_ds.make_pending(121, gtid))
+        }
+
+        assert!(!async_ds.make_pending(11, gtid));
+    }
+
+    // Tests that we can append and execute operations using try_combine().
+    #[test]
+    fn test_replica_try_combine() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+        assert!(async_ds.make_pending(121, ttkn_a.gtid()));
+        assert!(async_ds.try_combine(ttkn_a).is_ok());
+
+        assert_eq!(async_ds.replicas[&0].combiner.load(Ordering::SeqCst), 0);
+        assert_eq!(async_ds.replicas[&0].data.read(0).junk, 1);
+        assert_eq!(async_ds.contexts[0].res(), Some(Ok(107)));
+    }
+
+    // Tests whether try_combine() also applies pending operations on other threads to the log.
+    #[test]
+    fn test_replica_try_combine_pending() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+        async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
+        assert!(async_ds.make_pending(121, ttkn_a.gtid()));
+        assert!(async_ds.try_combine(ttkn_a).is_ok());
+
+        assert_eq!(async_ds.replicas[&0].data.read(0).junk, 1);
+        assert_eq!(async_ds.contexts[0].res(), Some(Ok(107)));
+    }
+
+    // Tests whether try_combine() fails if someone else is currently flat combining.
+    #[test]
+    fn test_replica_try_combine_fail() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+        async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
+        async_ds.replicas[&0].combiner.store(8, Ordering::SeqCst);
+        assert!(async_ds.make_pending(121, ttkn_a.gtid()));
+        assert!(async_ds.try_combine(ttkn_a).is_ok());
+
+        assert_eq!(async_ds.replicas[&0].data.read(0).junk, 0);
+        assert_eq!(async_ds.contexts[0].res(), None);
+    }
+
+    // Tests whether we can execute an operation against the log using execute_mut().
+    #[test]
+    fn test_replica_execute_combine() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+        assert_eq!(107, async_ds.execute_mut(121, ttkn_a).unwrap());
+        assert_eq!(1, async_ds.replicas[&0].data.read(0).junk);
+    }
+
+    // Tests whether get_response() retrieves a response to an operation that was executed
+    // against a replica.
+    #[test]
+    fn test_replica_get_response() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+        assert!(async_ds.make_pending(121, ttkn_a.gtid()));
+        assert_eq!(async_ds.get_response(ttkn_a).unwrap(), 107);
+    }
+
+    // Tests whether we can issue a read-only operation against the replica.
+    #[test]
+    fn test_replica_execute() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+
+        assert_eq!(107, async_ds.execute_mut(121, ttkn_a).unwrap());
+        assert_eq!(1, async_ds.execute(11, ttkn_a).unwrap());
+    }
+
+    /*
+    // TODO(erika): not sure how to port this test.
+    // Tests that execute() syncs up the replica with the log before
+    // executing the read against the data structure.
+    #[test]
+    fn test_replica_execute_not_synced() {
+        let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
+        let lt = slog.register().unwrap();
+        let repl = Replica::<Data>::new(lt);
+
+        let lt = slog.register().unwrap();
+        // Add in operations to the log off the side, not through the replica.
+        let o = [121, 212];
+        assert!(slog.append(&o, &lt, |_o, _mine| {}).is_ok());
+        slog.exec(&lt, &mut |_o, _mine| {});
+
+        let t1 = repl.register().expect("Failed to register with replica.");
+        assert_eq!(Ok(2), repl.execute(&slog, 11, t1).unwrap());
+    }
+    */
 
     // TODO(erika) - any specifics on which operations these were?
     // Check Lock before removing

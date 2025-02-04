@@ -1384,6 +1384,78 @@ mod test {
         assert_eq!(1, async_ds.execute(11, ttkn_a).unwrap());
     }
 
+    // Tests whether we can issue a read-only operation against the replica.
+    #[test]
+    fn test_replica_add_remove() {
+        let replicas = NonZeroUsize::new(1).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+        let mut num_ops = 0;
+        let mut tokens = Vec::new();
+
+        let ttkn_0a = async_ds.register(0).expect("Unable to register with log");
+        tokens.push(ttkn_0a);
+        let ttkn_0b = async_ds.register(0).expect("Unable to register with log");
+        tokens.push(ttkn_0b);
+
+        for ttkn_mut in &tokens {
+            assert_eq!(107, async_ds.execute_mut(121, *ttkn_mut).unwrap());
+            num_ops += 1;
+            for ttkn in &tokens {
+                assert_eq!(num_ops, async_ds.execute(11, *ttkn).unwrap());
+            }
+        }
+
+        let _ = async_ds.add_replica(1).unwrap();
+        let ttkn_1a = async_ds.register(1).expect("Unable to register with log");
+        tokens.push(ttkn_1a);
+        let ttkn_1b = async_ds.register(1).expect("Unable to register with log");
+        tokens.push(ttkn_1b);
+
+        for ttkn_mut in &tokens {
+            assert_eq!(107, async_ds.execute_mut(121, *ttkn_mut).unwrap());
+            num_ops += 1;
+            for ttkn in &tokens {
+                assert_eq!(num_ops, async_ds.execute(11, *ttkn).unwrap());
+            }
+        }
+
+        let _ = async_ds.add_replica(2).unwrap();
+        let ttkn_2a = async_ds.register(2).expect("Unable to register with log");
+        tokens.push(ttkn_2a);
+        let ttkn_2b = async_ds.register(2).expect("Unable to register with log");
+        tokens.push(ttkn_2b);
+
+        for ttkn_mut in &tokens {
+            assert_eq!(107, async_ds.execute_mut(121, *ttkn_mut).unwrap());
+            num_ops += 1;
+            for ttkn in &tokens {
+                assert_eq!(num_ops, async_ds.execute(11, *ttkn).unwrap());
+            }
+        }
+
+        let ret = async_ds.remove_replica(1).unwrap();
+        assert_eq!(ret, 1);
+
+        for ttkn_mut in &tokens {
+            assert_eq!(107, async_ds.execute_mut(121, *ttkn_mut).unwrap());
+            num_ops += 1;
+            for ttkn in &tokens {
+                assert_eq!(num_ops, async_ds.execute(11, *ttkn).unwrap());
+            }
+        }
+
+        let ret = async_ds.remove_replica(0).unwrap();
+        assert_eq!(ret, 0);
+
+        for ttkn_mut in &tokens {
+            assert_eq!(107, async_ds.execute_mut(121, *ttkn_mut).unwrap());
+            num_ops += 1;
+            for ttkn in &tokens {
+                assert_eq!(num_ops, async_ds.execute(11, *ttkn).unwrap());
+            }
+        }
+    }
+
     /*
     // TODO(erika): not sure how to port this test.
     // Tests that execute() syncs up the replica with the log before

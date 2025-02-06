@@ -296,7 +296,10 @@ pub enum NodeReplicatedError {
     /// Not enough memory to create a [`NodeReplicated`] instance.
     OutOfMemory,
     DuplicateReplica,
+    DuplicateLogReplica,
+    UnableToAddLogReplica,
     UnableToRemoveReplica,
+    UnableToRemoveLogReplica,
 }
 
 impl From<core::alloc::AllocError> for NodeReplicatedError {
@@ -466,56 +469,63 @@ where
     /// ```
     pub fn add_replica(&mut self, replica_id: ReplicaId) -> Result<(), NodeReplicatedError> {
         let log_token = log::LogToken(replica_id + 1);
-        let r = {
-            // Allocate the replica on the proper NUMA node
-            let _aff_tkn = self.affinity_mngr.switch(replica_id);
-            Replica::new(log_token.clone())
-            // aff_tkn is dropped here
-        };
-        logging::debug!("Adding replica {replica_id}");
-        if self.replicas.contains_key(&replica_id) {
-            return Err(NodeReplicatedError::DuplicateReplica);
-        }
 
-        self.replicas.insert(replica_id, r);
+        // Allocate the replica on the proper NUMA node
+        let _aff_tkn = self.affinity_mngr.switch(replica_id);
+        let r = Replica::new(log_token.clone());
 
         // get the most up to date replica
         let (max_replica_idx, max_local_tail) = self.log.find_max_tail();
 
-        // copy data from existing replica
-        let replica_locked = self.replicas[&max_replica_idx].data.read(0).clone();
-        let new_replica_data = &mut self.replicas[&replica_id].data.write(log_token.0);
-        **new_replica_data = replica_locked;
+        {
+            // copy data from existing replica
+            let replica_locked = self.replicas[&max_replica_idx].data.read(0).clone();
+            // No threads are routed to this replica yet, so do not need to acquire lock
+            let new_replica_data = &mut r.data.write(replica_id);
 
-        // push ltail entry for new replica
-        self.log.ltails[replica_id].store(max_local_tail, Ordering::Relaxed);
+            // Do clone operaiton - will be within affinity region
+            **new_replica_data = replica_locked;
 
-        // find and push existing lmask entry for new replica
-        let lmask_status = self.log.lmasks[max_replica_idx].get();
-        self.log.lmasks[replica_id].set(lmask_status);
-        logging::debug!(
-            "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks[replica_id].get() {:?}",
-            self.log.lmasks[replica_id].get()
-        );
-        self.log.add_log_replica(log_token);
+            // push ltail entry for new replica
+            self.log.ltails[replica_id].store(max_local_tail, Ordering::Relaxed);
 
-        Ok(())
+            // find and push existing lmask entry for new replica
+            let lmask_status = self.log.lmasks[max_replica_idx].get();
+            self.log.lmasks[replica_id].set(lmask_status);
+            logging::debug!(
+                "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks[replica_id].get() {:?}",
+                self.log.lmasks[replica_id].get()
+            );
+
+            if !self.log.add_log_replica(log_token).is_ok() {
+                return Err(NodeReplicatedError::DuplicateReplica);
+            }
+            // Drop read/write locks
+        }
+
+        logging::debug!("Adding replica {replica_id}");
+        match self.replicas.insert(replica_id, r) {
+            Some(_) => {
+                panic!("If we were able to call add_log_replica successfully, there should be no duplicate here!");
+            }
+            None => Ok(()),
+        }
+        // aff_tkn is dropped at return of function
     }
 
     pub fn remove_replica(
         &mut self,
         replica_id: ReplicaId,
     ) -> Result<ReplicaId, NodeReplicatedError> {
-        self.log.remove_log_replica(log::LogToken(replica_id + 1));
-
-        if self.replicas.contains_key(&replica_id) {
-            let r = self.replicas.remove(&replica_id);
-            core::mem::forget(r); // XXX: leak the replica until we fixed all problems with PT access
-        } else {
-            return Err(NodeReplicatedError::UnableToRemoveReplica);
+        match self.replicas.remove(&replica_id) {
+            Some(_) => {
+                self.log
+                    .remove_log_replica(log::LogToken(replica_id + 1))
+                    .expect("If replica was found, we should be able to remove it.");
+                Ok(replica_id)
+            }
+            None => Err(NodeReplicatedError::UnableToRemoveReplica),
         }
-
-        Ok(replica_id)
     }
 }
 

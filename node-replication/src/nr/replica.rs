@@ -785,7 +785,7 @@ where
     #[inline(always)]
     fn exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
         // Execute any operations on the shared log against this replica.
-        // TODO(gz, dynrep): This should probably be `num_registered_threads` aka context length?
+        // TODO(gz, dynrep): This should probably be `num_registered_threads` aka context length? // TODO(erika): investigate.
         let next = self.next.load(Ordering::Relaxed);
         {
             let mut data = self.data.write(next);

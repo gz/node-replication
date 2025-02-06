@@ -20,6 +20,7 @@ pub use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use static_assertions::const_assert;
 
 use crate::context::MAX_PENDING_OPS;
+use crate::nr::NodeReplicatedError;
 use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// A token that identifies a replica for a log.
@@ -318,7 +319,7 @@ where
     /// Determines the number of entries in the log. This is likely just `entries` rounded
     /// to the next power of two -- as long as it's above the minimal threshold required
     /// for the log to work (2*GC_FROM_HEAD).
-    fn entries_to_log_entries(entries: usize) -> usize {
+    pub fn entries_to_log_entries(entries: usize) -> usize {
         core::cmp::max(2 * GC_FROM_HEAD, entries)
             .checked_next_power_of_two()
             .unwrap_or(2 * GC_FROM_HEAD)
@@ -455,40 +456,76 @@ where
 
     /// Removes log entries for associated replicas. This is to allow dynamic adding and removing
     /// of replicas for memory efficiency & performance purposes.
-    pub(crate) fn remove_log_replica(&mut self, log_token: LogToken) {
-        //logging::info!("Removing replica {} from log.", log_token.0);
-        let replicas = self.replica_inventory.load(Ordering::Relaxed);
-        assert!(self
-            .replica_inventory
-            .compare_exchange(
+    pub(crate) fn remove_log_replica(
+        &mut self,
+        log_token: LogToken,
+    ) -> Result<(), NodeReplicatedError> {
+        logging::debug!("Removing replica {} from log.", log_token.0);
+
+        let mut attempts = 10;
+        while attempts > 0 {
+            let replicas = self.replica_inventory.load(Ordering::Relaxed);
+            if replicas & (1 << log_token.0) == 0 {
+                logging::debug!("Replica does not exist?");
+                return Err(NodeReplicatedError::UnableToRemoveLogReplica);
+            }
+
+            match self.replica_inventory.compare_exchange(
                 replicas,
                 replicas & !(1 << log_token.0),
                 Ordering::Relaxed,
-                Ordering::Relaxed
-            )
-            .is_ok());
-        //self.ltails
-        //    .insert(log_token.0, CachePadded::new(AtomicUsize::new(0)));
-        //self.lmasks
-        //    .insert(log_token.0, CachePadded::new(Cell::new(true)));
-        //logging::info!("self.ltails: {:?}", self.ltails);
-        //logging::info!("self.lmasks: {:?}", self.ltails);
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.ltails[log_token.0 - 1].store(0, Ordering::Relaxed);
+                    self.lmasks[log_token.0 - 1].set(true);
+                    return Ok(());
+                }
+                Err(_) => {
+                    // Someone else added or removed a replica since we last loaded it and checked for correctness.
+                    // This attempt is failed, let's try again if we are not out of attempts.
+                    attempts -= 1;
+                }
+            }
+        }
+
+        logging::error!("Too much turbulance in replica_inventory! Exceeded number of attempts to remove replica.");
+        Err(NodeReplicatedError::UnableToRemoveLogReplica)
     }
 
     /// Add log entries for associated replicas. This is to allow dynamic adding and removing
     /// of replicas for memory efficiency & performance purposes.
-    pub(crate) fn add_log_replica(&mut self, log_token: LogToken) {
-        //logging::info!("Adding replica {} to log.", log_token.0);
-        let replicas = self.replica_inventory.load(Ordering::Relaxed);
-        assert!(self
-            .replica_inventory
-            .compare_exchange(
+    pub(crate) fn add_log_replica(
+        &mut self,
+        log_token: LogToken,
+    ) -> Result<(), NodeReplicatedError> {
+        logging::debug!("Adding replica {} to log.", log_token.0);
+
+        let mut attempts = 10;
+        while attempts > 0 {
+            let replicas = self.replica_inventory.load(Ordering::Relaxed);
+            if replicas & (1 << log_token.0) != 0 {
+                logging::debug!("Replica already exists?");
+                return Err(NodeReplicatedError::DuplicateLogReplica);
+            }
+            match self.replica_inventory.compare_exchange(
                 replicas,
                 replicas | (1 << log_token.0),
                 Ordering::Relaxed,
                 Ordering::Relaxed,
-            )
-            .is_ok());
+            ) {
+                Ok(_) => return Ok(()),
+                Err(_) => {
+                    // Someone else added or removed a replica since we last loaded it and checked for correctness.
+                    // This attempt is failed, let's try again if we are not out of attempts.
+                    attempts -= 1;
+                }
+            }
+        }
+        logging::error!(
+            "Too much turbulance in replica_inventory! Exceeded number of attempts to add replica."
+        );
+        Err(NodeReplicatedError::UnableToAddLogReplica)
     }
 
     /// Resets the log. This is required for microbenchmarking the log; with
@@ -774,18 +811,20 @@ mod tests {
 
     // Test to validate that remove_replica operates correctly
     #[test]
-    fn test_remove_replica() {
+    fn test_remove_log_replica() {
         let mut log = Log::<Operation, (), ()>::default();
         let mut replicas: Vec<LogToken> = Vec::new();
 
         for _i in 1..MAX_REPLICAS_PER_LOG {
-            replicas.insert(0, log.register().unwrap());
+            let lt = log.register().unwrap();
+            log.ltails[lt.0].store(lt.0 + 1, Ordering::Relaxed);
+            replicas.insert(0, lt);
         }
 
         let chosen_one = replicas.pop().unwrap();
         let log_token = &chosen_one.0.clone();
 
-        log.remove_log_replica(chosen_one);
+        assert!(log.remove_log_replica(chosen_one).is_ok());
 
         // replica inventory to be false for the deleted entry
         assert_eq!(
@@ -794,9 +833,9 @@ mod tests {
         );
 
         // ltails to be zerod out
-        assert_eq!(log.ltails[*log_token].load(Ordering::Relaxed), 0);
+        assert_eq!(log.ltails[*log_token - 1].load(Ordering::Relaxed), 0);
 
         // lmasks to be set to true
-        assert_eq!(log.lmasks[*log_token].get(), true);
+        assert_eq!(log.lmasks[*log_token - 1].get(), true);
     }
 }

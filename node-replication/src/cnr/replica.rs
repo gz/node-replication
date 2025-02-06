@@ -1293,10 +1293,10 @@ mod test {
     fn test_replica_try_combine() {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
         let repl = Replica::<Data>::new(vec![slog]);
-        let _idx = repl.register();
+        let idx = repl.register().unwrap();
 
-        repl.make_pending(OpWr(121), 1, 0, false, false);
-        repl.try_combine(1, 0);
+        assert!(repl.make_pending(OpWr(121), idx.0, 0, false, false));
+        repl.try_combine(idx.0, 0);
 
         assert_eq!(repl.logstate[0].combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.data.junk.load(Ordering::Relaxed), 1);
@@ -1624,7 +1624,7 @@ mod test {
         for i in 0..nlogs {
             repl2.append_scan((WriteOp::SetScan(10 + i), idx2.tid(), false), idx2.tid());
         }
-        let _ignore = repl2.execute_mut(WriteOp::Set(0), idx2);
+        let _ignore = repl2.execute_mut(WriteOp::Set(0), idx2).unwrap();
 
         let resp = repl1.execute_mut(WriteOp::Set(3), idx1);
         assert_eq!(resp, Ok(nlogs + 1));

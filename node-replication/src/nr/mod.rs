@@ -1403,8 +1403,10 @@ mod test {
         let mut tokens = Vec::new();
 
         let ttkn_0a = async_ds.register(0).expect("Unable to register with log");
+        assert_eq!(ttkn_0a.rid, 0);
         tokens.push(ttkn_0a);
         let ttkn_0b = async_ds.register(0).expect("Unable to register with log");
+        assert_eq!(ttkn_0b.rid, 0);
         tokens.push(ttkn_0b);
 
         for ttkn_mut in &tokens {
@@ -1417,8 +1419,10 @@ mod test {
 
         let _ = async_ds.add_replica(1).unwrap();
         let ttkn_1a = async_ds.register(1).expect("Unable to register with log");
+        assert_eq!(ttkn_1a.rid, 1);
         tokens.push(ttkn_1a);
         let ttkn_1b = async_ds.register(1).expect("Unable to register with log");
+        assert_eq!(ttkn_1b.rid, 1);
         tokens.push(ttkn_1b);
 
         for ttkn_mut in &tokens {
@@ -1431,8 +1435,10 @@ mod test {
 
         let _ = async_ds.add_replica(2).unwrap();
         let ttkn_2a = async_ds.register(2).expect("Unable to register with log");
+        assert_eq!(ttkn_2a.rid, 2);
         tokens.push(ttkn_2a);
         let ttkn_2b = async_ds.register(2).expect("Unable to register with log");
+        assert_eq!(ttkn_2b.rid, 2);
         tokens.push(ttkn_2b);
 
         for ttkn_mut in &tokens {
@@ -1466,28 +1472,99 @@ mod test {
         }
     }
 
-    /*
-    // TODO(erika): not sure how to port this test.
-    // Tests that execute() syncs up the replica with the log before
-    // executing the read against the data structure.
+    // Tests whether threads can continue to do work during add/remove replica operations
     #[test]
-    fn test_replica_execute_not_synced() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::default();
-        let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
+    fn test_replica_add_remove_multithreaded() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        use std::sync::RwLock;
 
-        let lt = slog.register().unwrap();
-        // Add in operations to the log off the side, not through the replica.
-        let o = [121, 212];
-        assert!(slog.append(&o, &lt, |_o, _mine| {}).is_ok());
-        slog.exec(&lt, &mut |_o, _mine| {});
+        let num_replicas = 3;
+        let thread_per_replica = 4;
+        let two_seconds = std::time::Duration::from_secs(2);
 
-        let t1 = repl.register().expect("Failed to register with replica.");
-        assert_eq!(Ok(2), repl.execute(&slog, 11, t1).unwrap());
+        let replicas = NonZeroUsize::new(num_replicas).unwrap();
+        let async_ds = Arc::new(RwLock::new(
+            NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds"),
+        ));
+        let done = Arc::new(AtomicBool::new(false));
+
+        let mut threads = Vec::new();
+        for i in 0..num_replicas * thread_per_replica {
+            let async_ds_clone = async_ds.clone();
+            let done_clone = done.clone();
+
+            let child = std::thread::spawn(move || {
+                let ttkn = async_ds_clone
+                    .read()
+                    .unwrap()
+                    .register(i % num_replicas)
+                    .expect("Unable to register with log");
+                let mut op_count = 0;
+
+                // do work until done.
+                while !done_clone.load(Ordering::Relaxed) {
+                    // 1%-ish write workload
+                    for j in 0..1_000 {
+                        if j % (100 - i) == 0 {
+                            assert_eq!(
+                                107,
+                                async_ds_clone
+                                    .read()
+                                    .unwrap()
+                                    .execute_mut(121, ttkn)
+                                    .unwrap()
+                            );
+                        } else {
+                            let op = async_ds_clone.read().unwrap().execute(11, ttkn).unwrap();
+                            assert!(op >= op_count);
+                            op_count = op;
+                        }
+                    }
+                }
+            });
+            threads.push(child);
+        }
+
+        // Run for a bit all replicas
+        std::thread::sleep(two_seconds);
+
+        // Remove replicas until only 0th
+        for r in 1..num_replicas {
+            let ret = async_ds.write().unwrap().remove_replica(r).unwrap();
+            assert_eq!(ret, r);
+            std::thread::sleep(two_seconds);
+        }
+
+        // Restore replicas
+        for r in 1..num_replicas {
+            let _ = async_ds.write().unwrap().add_replica(r).unwrap();
+            std::thread::sleep(two_seconds);
+        }
+
+        // Remove - but leave last, instead of 0th
+        for r in 0..(num_replicas - 1) {
+            let ret = async_ds.write().unwrap().remove_replica(r).unwrap();
+            assert_eq!(ret, r);
+            std::thread::sleep(two_seconds);
+        }
+
+        // Restore replicas
+        for r in 0..(num_replicas - 1) {
+            let _ = async_ds.write().unwrap().add_replica(r).unwrap();
+            std::thread::sleep(two_seconds);
+        }
+
+        // Mark as done
+        done.store(true, Ordering::Relaxed);
+
+        // Wait for all threads to complete - this should not succeed if there are stuck threads.
+        for _i in 0..threads.len() {
+            let _retval = threads
+                .pop()
+                .unwrap()
+                .join()
+                .expect("Thread didn't finish successfully.");
+        }
     }
-    */
-
-    // TODO(erika) - any specifics on which operations these were?
-    // Check Lock before removing
-    // Check replica integrity after deletion
 }

@@ -378,7 +378,7 @@ where
     /// let idx = l.register().expect("Failed to register with the Log.");
     /// ```
     pub fn register(&self) -> Option<LogToken> {
-        for replica_id in 0..MAX_REPLICAS_PER_LOG {
+        for replica_id in 1..MAX_REPLICAS_PER_LOG {
             let replicas = self.replica_inventory.load(Ordering::Relaxed);
             if replicas & (1 << replica_id) == 0 {
                 assert!(self
@@ -414,17 +414,26 @@ where
     /// The ID (in `LogToken`) of the replica with the lowest tail and the
     /// corresponding/lowest tail `idx` in the `Log`.
     pub(crate) fn find_min_tail(&self) -> (usize, usize) {
-        let (mut min_replica_idx, mut min_local_tail) = (0, self.ltails[0].load(Ordering::Relaxed));
+        let mut min_idx = MAX_REPLICAS_PER_LOG;
+        for i in 0..MAX_REPLICAS_PER_LOG {
+            if self.replica_inventory.load(Ordering::Relaxed) & (1 << (i + 1)) != 0 {
+                min_idx = i;
+                break;
+            }
+        }
+        debug_assert!(min_idx != MAX_REPLICAS_PER_LOG);
+        let (mut min_replica_idx, mut min_local_tail) =
+            (min_idx, self.ltails[min_idx].load(Ordering::Relaxed));
 
         // Find the smallest local tail across all replicas.
-        for idx in 1..MAX_REPLICAS_PER_LOG {
-            if self.replica_inventory.load(Ordering::Relaxed) & (1 << idx) != 0 {
-                let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+        for idx in (min_idx + 1)..MAX_REPLICAS_PER_LOG {
+            if self.replica_inventory.load(Ordering::Relaxed) & (1 << (idx + 1)) != 0 {
+                let cur_local_tail = self.ltails[idx].load(Ordering::Relaxed);
                 //info!("Replica {} cur_local_tail {}.", idx - 1, cur_local_tail);
 
                 if cur_local_tail < min_local_tail {
                     min_local_tail = cur_local_tail;
-                    min_replica_idx = idx - 1;
+                    min_replica_idx = idx;
                 }
             }
         }
@@ -438,15 +447,25 @@ where
     /// The ID (in `LogToken`) of the replica with the highest tail and the
     /// corresponding/highest tail `idx` in the `Log`.
     pub(crate) fn find_max_tail(&self) -> (usize, usize) {
-        let (mut max_replica_idx, mut max_local_tail) = (0, self.ltails[0].load(Ordering::Relaxed));
+        let mut min_idx = MAX_REPLICAS_PER_LOG;
+        for i in 0..MAX_REPLICAS_PER_LOG {
+            if self.replica_inventory.load(Ordering::Relaxed) & (1 << (i + 1)) != 0 {
+                min_idx = i;
+                break;
+            }
+        }
+        debug_assert!(min_idx != MAX_REPLICAS_PER_LOG);
+
+        let (mut max_replica_idx, mut max_local_tail) =
+            (min_idx, self.ltails[min_idx].load(Ordering::Relaxed));
 
         // Find the local tail across all replicas.
-        for idx in 1..MAX_REPLICAS_PER_LOG {
-            if self.replica_inventory.load(Ordering::Relaxed) & (1 << idx) != 0 {
-                let cur_local_tail = self.ltails[idx - 1].load(Ordering::Relaxed);
+        for idx in (min_idx + 1)..MAX_REPLICAS_PER_LOG {
+            if self.replica_inventory.load(Ordering::Relaxed) & (1 << (idx + 1)) != 0 {
+                let cur_local_tail = self.ltails[idx].load(Ordering::Relaxed);
                 if cur_local_tail > max_local_tail {
                     max_local_tail = cur_local_tail;
-                    max_replica_idx = idx - 1;
+                    max_replica_idx = idx;
                 }
             }
         }

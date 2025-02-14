@@ -1519,7 +1519,6 @@ mod test {
                     // 1%-ish write workload
                     for j in 0..1_000 {
                         if j % (100 - i) == 0 {
-                            /*
                             assert_eq!(
                                 107,
                                 async_ds_clone
@@ -1528,7 +1527,6 @@ mod test {
                                     .execute_mut(121, ttkn)
                                     .unwrap()
                             );
-                            */
                         } else {
                             let op = async_ds_clone.read().unwrap().execute(11, ttkn).unwrap();
                             assert!(op >= op_count);
@@ -1580,7 +1578,6 @@ mod test {
             num_replicas * thread_per_replica
         );
 
-        // Wait for all threads to complete - this should not succeed if there are stuck threads.
         for _i in 0..threads.len() {
             let _retval = threads
                 .pop()

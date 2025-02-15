@@ -528,10 +528,29 @@ where
         }
 
         match self.replicas.remove(&replica_id) {
-            Some(_) => {
+            Some(r) => {
+                // Threads will no longer be routed to the replica after removing from self.replicas
+                // Now we have to wait until all ops on the replica are drained, which I'm assuming to mean
+                // nothing in flight and no pending results.
+                let contexts = self.context_iterator(replica_id);
+                loop {
+                    // We can safely get the results and inflight values if we hold the combiner locked
+                    // This is a similar path that execute_mut_locked takes.
+                    if let Some(cl) = r.acquire_combiner_lock() {
+                        // TODO(erika): will this get all the operations?
+                        r.combine(&self.log, contexts.clone(), cl).unwrap();
+                        break;
+                    }
+                    core::hint::spin_loop();
+                }
+
+                // The results are stored within the contexts, which are NOT deleted with the replica
+                // so we don't have to worry about them.
+
                 self.log
                     .remove_log_replica(log::LogToken(replica_id + 1))
                     .expect("If replica was found, we should be able to remove it.");
+
                 Ok(replica_id)
             }
             None => Err(NodeReplicatedError::UnableToRemoveReplica),

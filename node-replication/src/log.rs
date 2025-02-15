@@ -237,7 +237,7 @@ where
             v.push(Default::default());
         }
 
-        // Convert it to a boxed slice, so we don't accidentially change the size
+        // Convert it to a boxed slice, so we don't accidentally change the size
         let raw = v.into_boxed_slice();
 
         let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG] = arr![Default::default(); 5];
@@ -480,6 +480,7 @@ where
         log_token: LogToken,
     ) -> Result<(), NodeReplicatedError> {
         logging::debug!("Removing replica {} from log.", log_token.0);
+        assert!(log_token.0 >= 1);
 
         let mut attempts = 10;
         while attempts > 0 {
@@ -519,6 +520,7 @@ where
         log_token: LogToken,
     ) -> Result<(), NodeReplicatedError> {
         logging::debug!("Adding replica {} to log.", log_token.0);
+        assert!(log_token.0 >= 1);
 
         let mut attempts = 10;
         while attempts > 0 {

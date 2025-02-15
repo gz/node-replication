@@ -739,7 +739,7 @@ where
 
     // Try to become acquire the combiner lock here. If this fails, then return None.
     #[inline(always)]
-    fn acquire_combiner_lock(&self) -> Option<CombinerLock<D>> {
+    pub(crate) fn acquire_combiner_lock(&self) -> Option<CombinerLock<D>> {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _ in 0..4 {

@@ -52,8 +52,8 @@ impl ReplicaToken {
 ///
 /// # Important
 /// If this number is adjusted due to the use of the `arr_macro::arr` macro we
-/// have to adjust the `32` literals in the `new` constructor of `Replica`.
-pub const MAX_THREADS_PER_REPLICA: usize = 32;
+/// have to adjust the `64` literals in the `new` constructor of `Replica`.
+pub const MAX_THREADS_PER_REPLICA: usize = 128;
 const_assert!(
     MAX_THREADS_PER_REPLICA >= 1 && (MAX_THREADS_PER_REPLICA & (MAX_THREADS_PER_REPLICA - 1) == 0)
 );
@@ -224,7 +224,7 @@ where
                                 >::batch_size(),
                         ),
                     ),
-                inflight: RefCell::new(arr![Default::default(); 32]),
+                inflight: RefCell::new(arr![Default::default(); 128]),
                 result:
                     RefCell::new(
                         Vec::with_capacity(

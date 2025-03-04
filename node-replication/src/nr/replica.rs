@@ -318,7 +318,14 @@ where
         let (next, thread_routing) = match previous_routing {
             Some(bitmap) => {
                 // Clone bitmap to ensure it is allocated in same affinity that replica is created.
-                (bitmap.snapshot().count_ones(), bitmap.clone())
+                let (snapshot_first, snapshot_second) = bitmap.snapshot();
+                let next_gtid = if snapshot_second > 0 {
+                    128 + (128 - snapshot_second.trailing_zeros() as usize)
+                } else {
+                    128 - snapshot_first.trailing_zeros() as usize
+                };
+
+                (next_gtid, bitmap.clone())
             }
             None => (0, DEFAULT_BITMAP),
         };

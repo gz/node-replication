@@ -996,18 +996,14 @@ impl<'a, D: Dispatch> core::iter::Iterator for ContextIterator<'a, D> {
     type Item = &'a Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (active_threads_first, active_threads_second) = self.active_threads.snapshot();
+        let active_threads = self.active_threads.snapshot();
 
-        if active_threads_first > 0 {
-            let next_gtid = active_threads_first.trailing_zeros() as usize;
-            self.active_threads.clear_bit(next_gtid);
-            return Some(&self.contexts[next_gtid]);
-        }
-
-        if active_threads_second > 0 {
-            let next_gtid = active_threads_second.trailing_zeros() as usize + 128;
-            self.active_threads.clear_bit(next_gtid);
-            return Some(&self.contexts[next_gtid]);
+        for i in 0..active_threads.len() {
+            if active_threads[i] > 0 {
+                let next_gtid = 128 * i + active_threads[i].trailing_zeros() as usize;
+                self.active_threads.clear_bit(next_gtid);
+                return Some(&self.contexts[next_gtid]);
+            }
         }
 
         None

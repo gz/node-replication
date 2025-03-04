@@ -317,15 +317,15 @@ where
     ) -> Replica<D> {
         let (next, thread_routing) = match previous_routing {
             Some(bitmap) => {
+                let mut max_thread_id = 0;
+                // TODO: this is not adequately tested
+                for i in 0..MAX_THREADS_PER_REPLICA {
+                    if bitmap._test_bit(log_tkn.0 * MAX_THREADS_PER_REPLICA + i) {
+                        max_thread_id = i;
+                    }
+                }
                 // Clone bitmap to ensure it is allocated in same affinity that replica is created.
-                let (snapshot_first, snapshot_second) = bitmap.snapshot();
-                let next_gtid = if snapshot_second > 0 {
-                    128 + (128 - snapshot_second.trailing_zeros() as usize)
-                } else {
-                    128 - snapshot_first.trailing_zeros() as usize
-                };
-
-                (next_gtid, bitmap.clone())
+                (max_thread_id, bitmap.clone())
             }
             None => (0, DEFAULT_BITMAP),
         };

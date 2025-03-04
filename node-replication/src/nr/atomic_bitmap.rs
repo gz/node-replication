@@ -1,11 +1,17 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
 pub struct AtomicBitmap {
-    data: [AtomicU64; 4],
+    data: [AtomicU64; 10],
 }
 
 pub const DEFAULT_BITMAP: AtomicBitmap = AtomicBitmap {
     data: [
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
         AtomicU64::new(0),
         AtomicU64::new(0),
         AtomicU64::new(0),
@@ -17,6 +23,12 @@ impl Default for AtomicBitmap {
     fn default() -> Self {
         Self {
             data: [
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
+                AtomicU64::new(0),
                 AtomicU64::new(0),
                 AtomicU64::new(0),
                 AtomicU64::new(0),
@@ -34,18 +46,31 @@ impl Clone for AtomicBitmap {
                 AtomicU64::new(self.data[1].load(Ordering::Relaxed)),
                 AtomicU64::new(self.data[2].load(Ordering::Relaxed)),
                 AtomicU64::new(self.data[3].load(Ordering::Relaxed)),
+                AtomicU64::new(self.data[4].load(Ordering::Relaxed)),
+                AtomicU64::new(self.data[5].load(Ordering::Relaxed)),
+                AtomicU64::new(self.data[6].load(Ordering::Relaxed)),
+                AtomicU64::new(self.data[7].load(Ordering::Relaxed)),
+                AtomicU64::new(self.data[6].load(Ordering::Relaxed)),
+                AtomicU64::new(self.data[7].load(Ordering::Relaxed)),
             ],
         }
     }
 }
 
 impl AtomicBitmap {
-    pub fn snapshot(&self) -> (u128, u128) {
-        let first = self.data[0].load(Ordering::Relaxed) as u128
-            + ((self.data[1].load(Ordering::Relaxed) as u128) << u64::BITS);
-        let second = self.data[0].load(Ordering::Relaxed) as u128
-            + ((self.data[1].load(Ordering::Relaxed) as u128) << u64::BITS);
-        (first, second)
+    pub fn snapshot(&self) -> [u128; 5] {
+        [
+            self.data[0].load(Ordering::Relaxed) as u128
+                + ((self.data[1].load(Ordering::Relaxed) as u128) << u64::BITS),
+            self.data[2].load(Ordering::Relaxed) as u128
+                + ((self.data[3].load(Ordering::Relaxed) as u128) << u64::BITS),
+            self.data[4].load(Ordering::Relaxed) as u128
+                + ((self.data[5].load(Ordering::Relaxed) as u128) << u64::BITS),
+            self.data[6].load(Ordering::Relaxed) as u128
+                + ((self.data[7].load(Ordering::Relaxed) as u128) << u64::BITS),
+            self.data[8].load(Ordering::Relaxed) as u128
+                + ((self.data[9].load(Ordering::Relaxed) as u128) << u64::BITS),
+        ]
     }
 
     pub fn set_bit(&self, bit_pos: usize) {
@@ -74,5 +99,34 @@ impl AtomicBitmap {
         let idx = bit_pos / 64;
         let bit = bit_pos % 64;
         (self.data[idx].load(Ordering::SeqCst) & (1 << bit)) != 0
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use core::convert::TryInto;
+
+    pub fn set_correct_bit() {
+        for i in 0..(64 * 10) {
+            let my_bitmap = AtomicBitmap::default();
+            my_bitmap.set_bit(i);
+            for j in 0..(64 * 10) {
+                if j == i {
+                    assert!(my_bitmap._test_bit(i));
+                } else {
+                    assert!(!my_bitmap._test_bit(i));
+                }
+            }
+            let snapshot = my_bitmap.snapshot();
+            assert!(snapshot.len() == 5);
+            for j in 0..snapshot.len() {
+                if i / 64 == j {
+                    assert!(snapshot[j].trailing_zeros() == (64 - (i % 64)).try_into().unwrap());
+                } else {
+                    assert!(snapshot[j] == 0);
+                }
+            }
+        }
     }
 }

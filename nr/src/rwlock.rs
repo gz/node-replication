@@ -16,7 +16,7 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crossbeam_utils::CachePadded;
 
 /// Maximum number of reader threads that this lock supports.
-const MAX_READER_THREADS: usize = 96;
+const MAX_READER_THREADS: usize = 128;
 const_assert!(MAX_READER_THREADS > 0);
 
 /// A scalable reader-writer lock.
@@ -70,7 +70,7 @@ where
 
         RwLock {
             wlock: CachePadded::new(AtomicBool::new(false)),
-            rlock: arr![Default::default(); 96],
+            rlock: arr![Default::default(); 128],
             data: UnsafeCell::new(T::default()),
         }
     }
@@ -87,7 +87,7 @@ where
 
         Self {
             wlock: CachePadded::new(AtomicBool::new(false)),
-            rlock: arr![Default::default(); 96],
+            rlock: arr![Default::default(); 128],
             data: UnsafeCell::new(t),
         }
     }

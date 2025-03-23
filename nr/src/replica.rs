@@ -529,6 +529,13 @@ where
     fn try_combine(&self, tid: usize) {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
+
+        /*
+        if tid > 12 {
+            return;
+        }
+        */
+
         for _i in 0..4 {
             if unsafe {
                 core::ptr::read_volatile(

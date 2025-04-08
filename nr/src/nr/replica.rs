@@ -1,0 +1,929 @@
+// Copyright © 2019-2022 VMware, Inc. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! The Replica implementation for Node Replication.
+//!
+//! A replica holds one instance of a data-structure and ensures all accesses to
+//! the data-structure are synchronized with respect to the order in the shared
+//! [`Log`].
+
+use alloc::vec::Vec;
+use core::cell::RefCell;
+use core::convert::TryInto;
+use core::fmt::{self, Debug};
+use core::hint::spin_loop;
+#[cfg(not(loom))]
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+use crossbeam_utils::CachePadded;
+#[cfg(loom)]
+use loom::sync::atomic::{AtomicUsize, Ordering};
+
+use super::atomic_bitmap::{AtomicBitmap, DEFAULT_BITMAP};
+use super::context::Context;
+use super::log::{Log, LogToken};
+use super::rwlock::RwLock;
+use super::ContextIterator;
+use super::Dispatch;
+use super::ThreadToken;
+use super::MAX_THREADS_PER_INSTANCE;
+
+pub use crate::replica::ReplicaId;
+pub use crate::replica::ReplicaToken;
+pub use crate::replica::MAX_THREADS_PER_REPLICA;
+
+/// Errors a replica can encounter (and return to clients) when they execute
+/// operations.
+///
+/// Note that these errors are not fatal and are resolved as part of the
+/// [`crate::nr::NodeReplicated`] logic and not passed on to clients. Therefore,
+/// clients of the library don't need to worry about this if they don't
+/// implement their own version of [`crate::nr::NodeReplicated`].
+pub enum ReplicaError<'r, D>
+where
+    D: Sized + Dispatch + Sync + Clone,
+{
+    /// We don't have space in the log to enqueue our batch of operations.
+    ///
+    /// This can happen if one or more replicas (not our own) stopped making
+    /// progress and have not applied the outstanding operations in the log. If
+    /// they fall behind too much we will eventually run out of space since the
+    /// log is implemented as a bounded, circular buffer.
+    ///
+    /// If this happens the [`ReplicaId`] reported in this error is one of the
+    /// replicas that is behind (it can definitely happen that more than one
+    /// replicas are slow and behind and need to be poked, then the [`Replica`]
+    /// will just return this error multiple times, until we re-tried enough
+    /// times and have adanved all the replicas which are behind). The system
+    /// should "poke" replicas which are behind using [`Replica::sync`].
+    ///
+    /// After poking a replica, the system should resume the original operation
+    /// on the current replica using the already acquired (and returned, as part
+    /// of this error) [`CombinerLock`] of our local replica. A client is
+    /// supposed to call [`Replica::execute_locked`] or
+    /// [`Replica::execute_mut_locked`] with the combiner lock.
+    NoLogSpace(ReplicaId, CombinerLock<'r, D>),
+
+    /// After we enqueue operations in the log there is a process known as
+    /// garbage-collection for old entries in the log. It tries to occasionally
+    /// advance the (global) log head pointer.
+    ///
+    /// If we can't do this (because a replica is behind and has it's own head
+    /// pointer at the same index as the global head pointer of the log), we
+    /// report an error back to the client. The error contains the ID of the
+    /// replica that is behind so we can go and poke it e.g., with
+    /// [`Replica::sync`].
+    ///
+    /// If we get this error during [`Replica::execute_mut`] it means that the
+    /// system did manage to execute the operations since GC happens afterwards.
+    GcFailed(ReplicaId),
+}
+
+impl<D> Debug for ReplicaError<'_, D>
+where
+    D: Sized + Dispatch + Sync + Clone,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReplicaError::NoLogSpace(rid, _cl) => {
+                write!(f, "ReplicaError::NoLogSpace(rid = {})", rid)
+            }
+            ReplicaError::GcFailed(rid) => {
+                write!(f, "ReplicaError::GcFailed(rid = {})", rid)
+            }
+        }
+    }
+}
+
+/// An instance of a replicated data structure which uses a shared [`Log`] to
+/// scale operations on the data structure across cores and processors.
+///
+/// Takes in one generic type argument: `D` which is the underlying sequential
+/// data structure. `D` must implement the [`Dispatch`] trait.
+///
+/// - A thread can be registered against the replica by calling
+///   [`Replica::register()`].
+///
+/// - A mutable operation can be issued by calling [`Replica::execute_mut()`]. A
+///   mutable operation will be eventually executed against `D` by calling
+///   [`Dispatch::dispatch_mut`] along with any operations that we received from
+///   other replicas/threads that share the same underlying log.
+///
+/// - A immutable operation uses [`Replica::execute`] and eventually calls D's
+///   [`Dispatch::dispatch`] method.
+///
+/// # When to use Replica
+///
+/// In most common cases, a client of this library doesn't need to interact
+/// directly with a [`Replica`] object, but instead should use
+/// [`crate::nr::NodeReplicated`] which encapsulates multiple replica objects
+/// and a log, handles registration and ensures liveness when using multiple
+/// replicas.
+pub struct Replica<D>
+where
+    D: Sized + Dispatch + Sync + Clone,
+{
+    /// An identifier that we got from the Log when the replica was registered
+    /// against the shared-log ([`Log::register()`]). Required to pass to the
+    /// log when consuming operations from the log.
+    log_tkn: LogToken,
+
+    /// Stores the index of the thread currently doing flat combining. Field is
+    /// zero if there isn't any thread actively performing flat-combining.
+    /// Atomic since this acts as the combiner lock.
+    pub(crate) combiner: CachePadded<AtomicUsize>,
+
+    /// Thread index that will be handed out to the next thread that registers
+    /// with the replica when calling [`Replica::register()`].
+    pub(crate) next: CachePadded<AtomicUsize>,
+
+    /// A buffer of operations for flat combining.
+    ///
+    /// The combiner stages operations in this vector and then batch appends
+    /// them in the shared log. This helps amortize the cost of the
+    /// `compare_and_swap` on the tail of the log.
+    buffer: RefCell<Vec<<D as Dispatch>::WriteOperation>>,
+
+    /// Number of operations collected by the combiner from each thread at any
+    /// given point of time. Index `i` holds the number of operations collected
+    /// from thread with [`crate::replica::ThreadIdx`] `i + 1`.
+    inflight: RefCell<[usize; MAX_THREADS_PER_INSTANCE]>,
+
+    /// A buffer of results collected after flat combining. With the help of
+    /// `inflight`, the combiner enqueues these results into the appropriate
+    /// thread context.
+    result: RefCell<Vec<<D as Dispatch>::Response>>,
+
+    /// The underlying data structure. This is shared among all threads that are
+    /// registered with this replica. Each replica maintains its own copy of
+    /// `data`.
+    pub data: CachePadded<RwLock<D>>,
+
+    /// Bitmap for which threads are submitting operations (registered) to this replica
+    pub thread_routing: AtomicBitmap,
+}
+
+/// The Replica is [`Sync`].
+///
+/// Member variables are protected by the combiner lock of the replica
+/// (`combiner`). Contexts are thread-safe.
+unsafe impl<D> Sync for Replica<D> where D: Sized + Sync + Dispatch + Clone {}
+
+impl<D> core::fmt::Debug for Replica<D>
+where
+    D: Sized + Sync + Dispatch + Clone,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "Replica")
+    }
+}
+
+impl<D> Replica<D>
+where
+    D: Sized + Default + Dispatch + Sync + Clone,
+{
+    /// Constructs an instance of a replicated data structure.
+    ///
+    /// Takes a token to the shared log as an argument. Note that the [`Log`]
+    /// itself is passed as an argument to the operations that will need to
+    /// modify it.
+    ///
+    /// The data-structure `D` will be instantiated using its [`Default`]
+    /// constructor.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// #![feature(generic_associated_types)]
+    /// use nr2::nr::Dispatch;
+    /// use nr2::nr::Log;
+    /// use nr2::nr::Replica;
+    ///
+    /// // The data structure we want replicated.
+    /// #[derive(Default, Clone)]
+    /// struct Data {
+    ///     junk: u64,
+    /// }
+    ///
+    /// // This trait allows the `Data` to be used with node-replication.
+    /// impl Dispatch for Data {
+    ///     type ReadOperation<'rop> = ();
+    ///     type WriteOperation = u64;
+    ///     type Response = Option<u64>;
+    ///
+    ///     // A read returns the underlying u64.
+    ///     fn dispatch<'rop>(
+    ///         &self,
+    ///         _op: Self::ReadOperation<'rop>,
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
+    ///     }
+    ///
+    ///     // A write updates the underlying u64.
+    ///     fn dispatch_mut(
+    ///         &mut self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Self::Response {
+    ///         self.junk = op;
+    ///         None
+    ///     }
+    /// }
+    ///
+    /// // First create a shared log.
+    /// let log = Log::<<Data as Dispatch>::WriteOperation>::default();
+    ///
+    /// // Create a replica that uses the above log.
+    /// let ltkn = log.register().unwrap();
+    /// let replica = Replica::<Data>::new(ltkn, None);
+    /// ```
+    pub fn new(log_tkn: LogToken, previous_routing: Option<AtomicBitmap>) -> Replica<D> {
+        Replica::with_data(log_tkn, Default::default(), previous_routing)
+    }
+}
+
+/// The CombinerLock object indicates that we succesfully hold the combiner lock of the
+/// [`Replica`].
+///
+/// The atomic `combiner` field is set to the [`crate::replica::ThreadIdx`] of the owner. On `drop` we have
+/// to reset it to 0.
+pub struct CombinerLock<'a, D>
+where
+    D: Sized + Dispatch + Sync + Clone,
+{
+    replica: &'a Replica<D>,
+}
+
+impl<'a, D> CombinerLock<'a, D>
+where
+    D: Sized + Dispatch + Sync + Clone,
+{
+    /// Inidcates we're holding the CombinerLock.
+    ///
+    /// # Safety
+    /// This should basically only ever be called in [`Replica::acquire_combiner_lock()`]
+    /// if the compare exchange succeeds.
+    unsafe fn new(replica: &'a Replica<D>) -> Self {
+        Self { replica }
+    }
+}
+
+impl<D> Drop for CombinerLock<'_, D>
+where
+    D: Sized + Dispatch + Sync + Clone,
+{
+    /// Allow other threads to perform flat combining once we have finished all
+    /// our work.
+    ///
+    /// # TODO for better type safety
+    ///
+    /// Unfortunately this isn't a traditional lock that "owns" the underlying
+    /// data.
+    ///
+    /// So we must ensure, we've dropped all mutable references to thread
+    /// contexts and to the staging buffer in [`Replica`] before this is
+    /// dropped. Right now if the [`Replica`] code accidentially drops this it
+    /// would be a disaster.
+    fn drop(&mut self) {
+        self.replica.combiner.store(0, Ordering::Release);
+    }
+}
+
+impl<D> Debug for CombinerLock<'_, D>
+where
+    D: Sized + Dispatch + Sync + Clone,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "CombinerLock")
+    }
+}
+
+impl<D> Replica<D>
+where
+    D: Sized + Dispatch + Sync + Clone,
+{
+    /// Similar to [`Replica::new`], but we pass an existing data-structure as
+    /// an argument (`d`) rather than relying on the [`Default`] trait to create
+    /// one for us.
+    ///
+    /// - [`Replica::new`] is the safest method to create a Replica.
+    /// - If [`Replica::with_data`] is used, care must be taken that an exact
+    ///   [`Copy`] of `d` is passed to every Replica object of the replicated
+    ///   data-structure. If not, operations when executed on different replicas
+    ///   may give different results.
+    pub fn with_data(
+        log_tkn: LogToken,
+        d: D,
+        previous_routing: Option<AtomicBitmap>,
+    ) -> Replica<D> {
+        let (next, thread_routing) = match previous_routing {
+            Some(bitmap) => {
+                let mut max_thread_id = 0;
+                // TODO: this is not adequately tested
+                for i in 0..MAX_THREADS_PER_REPLICA {
+                    if bitmap._test_bit(log_tkn.0 * MAX_THREADS_PER_REPLICA + i) {
+                        max_thread_id = i;
+                    }
+                }
+                // Clone bitmap to ensure it is allocated in same affinity that replica is created.
+                (max_thread_id, bitmap.clone())
+            }
+            None => (0, DEFAULT_BITMAP),
+        };
+        Replica {
+            log_tkn,
+            combiner: CachePadded::new(AtomicUsize::new(0)),
+            next: CachePadded::new(AtomicUsize::new(next.try_into().unwrap())),
+            buffer:
+                RefCell::new(
+                    Vec::with_capacity(
+                        MAX_THREADS_PER_REPLICA
+                            * Context::<
+                                <D as Dispatch>::WriteOperation,
+                                <D as Dispatch>::Response,
+                            >::batch_size(),
+                    ),
+                ),
+            inflight: RefCell::new([0; MAX_THREADS_PER_INSTANCE]),
+            result:
+                RefCell::new(
+                    Vec::with_capacity(
+                        MAX_THREADS_PER_REPLICA
+                            * Context::<
+                                <D as Dispatch>::WriteOperation,
+                                <D as Dispatch>::Response,
+                            >::batch_size(),
+                    ),
+                ),
+            data: CachePadded::new(RwLock::<D>::new(d)),
+            thread_routing,
+        }
+    }
+
+    /// Registers a thread with this replica. Returns a [`ReplicaToken`] if the
+    /// registration was successfull. None if the registration failed.
+    ///
+    /// The [`ReplicaToken`] is used to identify which thread issues the
+    /// operation for subsequent [`Replica::execute()`] and
+    /// [`Replica::execute_mut`] calls.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// #![feature(generic_associated_types)]
+    /// use nr2::nr::Dispatch;
+    /// use nr2::nr::Log;
+    /// use nr2::nr::Replica;
+    ///
+    /// #[derive(Default, Clone)]
+    /// struct Data {
+    ///     junk: u64,
+    /// }
+    ///
+    /// impl Dispatch for Data {
+    ///     type ReadOperation<'rop> = ();
+    ///     type WriteOperation = u64;
+    ///     type Response = Option<u64>;
+    ///
+    ///     fn dispatch<'rop>(
+    ///         &self,
+    ///         _op: Self::ReadOperation<'rop>,
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
+    ///     }
+    ///
+    ///     fn dispatch_mut(
+    ///         &mut self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Self::Response {
+    ///         self.junk = op;
+    ///         None
+    ///     }
+    /// }
+    ///
+    /// let log = Log::<<Data as Dispatch>::WriteOperation>::default();
+    /// let logtkn = log.register().unwrap();
+    /// let replica = Replica::<Data>::new(logtkn, None);
+    ///
+    /// // Calling register() returns a thread token that can be used to execute
+    /// // operations against the replica.
+    /// let thrtkn = replica.register().expect("Failed to register with replica.");
+    /// ```
+    pub fn register(&self) -> Option<ThreadToken> {
+        // Loop until we either run out of identifiers or we manage to increment `next`.
+        loop {
+            let idx = self.next.load(Ordering::SeqCst);
+
+            if idx > MAX_THREADS_PER_REPLICA {
+                return None;
+            };
+
+            if self
+                .next
+                .compare_exchange_weak(idx, idx + 1, Ordering::SeqCst, Ordering::SeqCst)
+                != Ok(idx)
+            {
+                continue;
+            };
+
+            //logging::info!("register() {idx}");
+            let rtkn = ReplicaToken(idx);
+            // LogToken and ReplicaId are off by one
+            let ttkn = ThreadToken::new(self.replica_id(), rtkn);
+
+            self.thread_routing.set_bit(ttkn.gtid());
+            return Some(ttkn);
+        }
+    }
+
+    /// Executes a mutable operation against this replica and returns a
+    /// response.
+    ///
+    /// # Arguments
+    /// - `slog`: Is a reference to the shared log. It is a bug to supply a log
+    ///    reference that does not match the log-token supplied to the
+    ///    constructor of the Replica. Ideally, this is runtime checked and
+    ///    panics in the future.
+    /// - `op`: The operation we want to execute.
+    /// - `idx`: Is the identifier for the thread performing the execute
+    ///   operation obtained from [`Replica::register`].
+    ///
+    /// # Returns
+    /// If the operation was able to execute we return the result wrapped in a
+    /// [`Result::Ok`]. If the operation could not be executed (because another
+    /// [`Replica`] was lagging behind) we return a [`ReplicaError`] with more
+    /// information on why we're stalled.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// #![feature(generic_associated_types)]
+    /// use nr2::nr::Dispatch;
+    /// use nr2::nr::Log;
+    /// use nr2::nr::Replica;
+    ///
+    /// #[derive(Default, Clone)]
+    /// struct Data {
+    ///     junk: u64,
+    /// }
+    ///
+    /// impl Dispatch for Data {
+    ///     type ReadOperation<'rop> = ();
+    ///     type WriteOperation = u64;
+    ///     type Response = Option<u64>;
+    ///
+    ///     fn dispatch<'rop>(
+    ///         &self,
+    ///         _op: Self::ReadOperation<'rop>,
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
+    ///     }
+    ///
+    ///     fn dispatch_mut(
+    ///         &mut self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Self::Response {
+    ///         self.junk = op;
+    ///         None
+    ///     }
+    /// }
+    ///
+    /// let log = Log::<<Data as Dispatch>::WriteOperation>::default();
+    /// let logtkn = log.register().unwrap();
+    /// let replica = Replica::<Data>::new(logtkn, None);
+    /// let thrtkn = replica.register().expect("Failed to register with replica.");
+    ///
+    /// // execute_mut() can be used to write to the replicated data structure.
+    /// // TODO(hunhoffe): need to update below lines
+    /// // let res = replica.execute_mut(&log, 100, thrtkn);
+    /// // assert_eq!(None, res.unwrap());
+    /// ```
+    pub(crate) fn execute_mut(
+        &self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        contexts: ContextIterator<D>,
+    ) -> Result<(), ReplicaError<D>> {
+        // Enqueue the operation onto the thread local batch and then try to flat combine.
+        self.try_combine(slog, contexts)
+    }
+
+    /// See [`Replica::execute_mut()`] for a general description of this method.
+    ///
+    /// # Note
+    /// This method is only to be called in case we got a [`ReplicaError`] from
+    /// an earlier `execute_mut` call which contained the combiner lock as part
+    /// of the error.
+    ///
+    /// Before calling, the client should have ensured that progress was made on
+    /// the replica that was reported as stuck. Study [`crate::nr::NodeReplicated`]
+    /// for an example on how to use this method.
+    pub(crate) fn execute_mut_locked<'lock>(
+        &'lock self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        contexts: ContextIterator<D>,
+        combiner_lock: CombinerLock<'lock, D>,
+    ) -> Result<(), ReplicaError<D>> {
+        // Enqueue the operation onto the thread local batch and then try to flat combine.
+        self.combine(slog, contexts, combiner_lock)
+    }
+
+    /// Executes an immutable operation against this replica and returns a
+    /// response.
+    ///
+    /// # Arguments
+    /// - `slog`: Is a reference to the shared log. It is a bug to supply a log
+    ///    reference that does not match the log-token supplied to the
+    ///    constructor of the Replica. Ideally, this is runtime checked and
+    ///    panics in the future.
+    /// - `op`: The operation we want to execute.
+    /// - `idx`: Is the identifier for the thread performing the execute
+    ///   operation obtained from [`Replica::register`].
+    ///
+    /// # Returns
+    /// If the operation was able to execute we return the result wrapped in a
+    /// [`Result::Ok`]. If the operation could not be executed (because another
+    /// [`Replica`] was lagging behind) we return a [`ReplicaError`] with more
+    /// information on why we're stalled.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// #![feature(generic_associated_types)]
+    /// use nr2::nr::Dispatch;
+    /// use nr2::nr::Log;
+    /// use nr2::nr::Replica;
+    ///
+    /// use std::sync::Arc;
+    ///
+    /// #[derive(Default, Clone)]
+    /// struct Data {
+    ///     junk: u64,
+    /// }
+    ///
+    /// impl Dispatch for Data {
+    ///     type ReadOperation<'rop> = ();
+    ///     type WriteOperation = u64;
+    ///     type Response = Option<u64>;
+    ///
+    ///     fn dispatch<'rop>(
+    ///         &self,
+    ///         _op: Self::ReadOperation<'rop>,
+    ///     ) -> Self::Response {
+    ///         Some(self.junk)
+    ///     }
+    ///
+    ///     fn dispatch_mut(
+    ///         &mut self,
+    ///         op: Self::WriteOperation,
+    ///     ) -> Self::Response {
+    ///         self.junk = op;
+    ///         None
+    ///     }
+    /// }
+    ///
+    /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
+    /// let logtkn = log.register().unwrap();
+    /// let replica = Replica::<Data>::new(logtkn, None);
+    /// let thrtkn = replica.register().expect("Failed to register with replica.");
+    /// // TODO(hunhoffe): fix below document code
+    /// // let _wr = replica.execute_mut(&log, 100, thrtkn);
+    ///
+    /// // execute() can be used to read from the replicated data structure.
+    /// //let res = replica.execute(&log, (), thrtkn);
+    /// //assert_eq!(Some(100), res.unwrap());
+    /// ```
+    ///
+    /// # Implementation details
+    /// Issues a read-only operation against the replica and returns a response.
+    /// Makes sure the replica is synced up against the log before doing so.
+    pub(crate) fn execute<'rop>(
+        &self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        op: <D as Dispatch>::ReadOperation<'rop>,
+        contexts: ContextIterator<D>,
+        idx: ReplicaToken,
+    ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
+    {
+        // We can perform the read only if our replica is synced up against
+        // the shared log. If it isn't, then try to combine until it is synced up.
+        let ctail = slog.get_ctail();
+        while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
+            if let Err(e) = self.try_combine(slog, contexts.clone()) {
+                return Err((e, op));
+            }
+            spin_loop();
+        }
+
+        return Ok(self.data.read(idx.tid()).dispatch(op));
+    }
+
+    /// See [`Replica::execute()`] for a general description of this method.
+    ///
+    /// # Note
+    /// This method is only to be called in case we got a [`ReplicaError`] from
+    /// an earlier [`Replica::execute`] call which contained the combiner lock
+    /// as part of the error.
+    ///
+    /// Before calling, the client should have ensured that progress was made on
+    /// the replica that was reported as stuck. Study [`crate::nr::NodeReplicated`]
+    /// for an example on how to use this method.
+    pub(crate) fn execute_locked<'rop, 'lock>(
+        &'lock self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        op: <D as Dispatch>::ReadOperation<'rop>,
+        idx: ReplicaToken,
+        contexts: ContextIterator<D>,
+        combiner_lock: CombinerLock<'lock, D>,
+    ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
+    {
+        // We can perform the read only if our replica is synced up against
+        // the shared log. If it isn't, then try to combine until it is synced up.
+        let ctail = slog.get_ctail();
+        if !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
+            if let Err(e) = self.combine(slog, contexts.clone(), combiner_lock) {
+                return Err((e, op));
+            }
+        }
+        // TODO(performance): If we're convinced this assert never fails
+        // (because we return errors in some cases now, all of the ones that
+        // make this assert fail?), we can get rid of the while below...
+        assert!(slog.is_replica_synced_for_reads(&self.log_tkn, ctail));
+        while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
+            if let Err(e) = self.try_combine(slog, contexts.clone()) {
+                return Err((e, op));
+            }
+            spin_loop();
+        }
+
+        Ok(self.data.read(idx.tid()).dispatch(op))
+    }
+
+    /*
+    /// Busy waits until a response is available within the thread's context.
+    ///
+    /// # Arguments
+    /// - `slog`: The shared log.
+    /// - `idx`: identifies this thread.
+    pub(crate) fn get_response(
+        &self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        idx: usize,
+    ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
+        let mut iter = 0;
+        let interval = 1 << 29;
+
+        // Keep trying to retrieve a response from the thread context. After trying `interval`
+        // times with no luck, try to perform flat combining to make some progress.
+        loop {
+            let r = self.contexts[idx - 1].res();
+            if let Some(resp) = r {
+                return Ok(resp);
+            }
+
+            iter += 1;
+
+            if iter == interval {
+                self.try_combine(slog)?;
+                iter = 0;
+            }
+        }
+    }
+    */
+
+    /// Executes a passed in closure against the replica's underlying data structure.
+    /// Useful for unit testing; can be used to verify certain properties of the data
+    /// structure after issuing a bunch of operations against it.
+    ///
+    /// # Note
+    /// There is no need for a regular client to ever call this function. Only use for
+    /// testing.
+    #[doc(hidden)]
+    pub fn verify<F: FnMut(&D)>(&self, slog: &Log<<D as Dispatch>::WriteOperation>, mut v: F) {
+        // Acquire the combiner lock before attempting anything on the data structure.
+        // Use an idx greater than the maximum that can be allocated.
+        while self.combiner.compare_exchange_weak(
+            0,
+            MAX_THREADS_PER_REPLICA + 2,
+            Ordering::Acquire,
+            Ordering::Acquire,
+        ) != Ok(0)
+        {
+            spin_loop();
+        }
+
+        let mut data = self.data.write(self.next.load(Ordering::Relaxed));
+        let mut f = |o: <D as Dispatch>::WriteOperation, _mine: bool| {
+            data.dispatch_mut(o);
+        };
+
+        slog.exec(&self.log_tkn, &mut f);
+
+        v(&data);
+
+        self.combiner.store(0, Ordering::Release);
+    }
+
+    /// Synchronizes the replica by applying the outstanding operations in the
+    /// log without submitting any new operation from our own thread(s).
+    ///
+    /// This method is useful in the following scenarion: If a replica stops
+    /// making progress and some threads on another replicas are very active,
+    /// the active replicas will eventually use all the available space in the
+    /// log and won't be able perform garbage collection because the inactive
+    /// replica needs to see the updates before they can be discarded in the
+    /// log. This method can "nudge" an inactive replica to make progress.
+    ///
+    /// # Arguments
+    ///
+    /// - `slog`: The corresponding operation log. It is a bug to supply a log
+    /// reference that does not match the log-token supplied to the constructor
+    /// of the Replica. Ideally, this is runtime checked and panics in the
+    /// future.
+    ///
+    /// # See also
+    /// - [`Replica::try_sync`]
+    pub fn sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+        let ctail = slog.get_ctail();
+        while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
+            self.try_sync(slog);
+            spin_loop();
+        }
+    }
+
+    /// Returns the replica id
+    #[inline(always)]
+    pub(crate) fn replica_id(&self) -> ReplicaId {
+        self.log_tkn.0 - 1
+    }
+
+    /// Similar to [`Replica::sync`] but doesn't repeatedly try to acquire the
+    /// combiner lock: if another thread already holds the lock and works
+    /// towards advancing the replica it will just return.
+    ///
+    /// # Note
+    /// This method should ideally be preferred over [`Replica::sync`] whenever
+    /// we don't need strict guarantees that the replica has advanced.
+    /// [`Replica::sync`] can lead to "a thundering herd effect" if many threads
+    /// call it at the same time.
+    #[inline(always)]
+    pub(crate) fn try_sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+        // Try to become the combiner here. If this fails, then simply return.
+        if let Some(_combiner_lock) = self.acquire_combiner_lock() {
+            // Successfully became the combiner; perform one round of flat combining.
+            self.exec(slog);
+        }
+    }
+
+    // Try to become acquire the combiner lock here. If this fails, then return None.
+    #[inline(always)]
+    pub(crate) fn acquire_combiner_lock(&self) -> Option<CombinerLock<D>> {
+        // First, check if there already is a flat combiner. If there is no active flat combiner
+        // then try to acquire the combiner lock. If there is, then just return.
+        for _ in 0..4 {
+            if self.combiner.load(Ordering::Relaxed) != 0 {
+                #[cfg(loom)]
+                loom::thread::yield_now();
+                return None;
+            }
+        }
+
+        if self
+            .combiner
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Acquire)
+            != Ok(0)
+        {
+            #[cfg(loom)]
+            loom::thread::yield_now();
+            None
+        } else {
+            unsafe { Some(CombinerLock::new(self)) }
+        }
+    }
+
+    /// Appends an operation to the log and attempts to perform flat combining.
+    /// Accepts a thread `tid` as an argument. Required to acquire the combiner lock.
+    pub(crate) fn try_combine(
+        &self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        contexts: ContextIterator<D>,
+    ) -> Result<(), ReplicaError<D>> {
+        // Try to become the combiner here. If this fails, then simply return.
+        if let Some(combiner_lock) = self.acquire_combiner_lock() {
+            // Successfully became the combiner; perform one round of flat combining.
+            self.combine(slog, contexts, combiner_lock)?;
+            Ok(())
+        } else {
+            #[cfg(loom)]
+            loom::thread::yield_now();
+            Ok(())
+        }
+    }
+
+    #[inline(always)]
+    fn exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+        // Execute any operations on the shared log against this replica.
+        // TODO(gz, dynrep): This should probably be `num_registered_threads` aka context length? // TODO(erika): investigate.
+        let next = self.next.load(Ordering::Relaxed);
+        {
+            let mut data = self.data.write(next);
+            let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
+                let _resp = data.dispatch_mut(o);
+                if mine {
+                    panic!("Ups -- we just lost a result?");
+                }
+            };
+            slog.exec(&self.log_tkn, &mut f);
+        }
+    }
+
+    #[inline(always)]
+    fn collect_thread_ops(
+        &self,
+        contexts: ContextIterator<D>,
+        buffer: &mut Vec<D::WriteOperation>,
+        operations: &mut [usize],
+    ) {
+        // Collect operations from each thread registered with this replica.
+        for (i, context) in contexts.enumerate() {
+            let ctxt_iter = context.iter();
+            operations[i] = ctxt_iter.len();
+            // meta-data is (), throw it away
+            buffer.extend(ctxt_iter.map(|op| op.0));
+        }
+    }
+
+    /// Performs one round of flat combining. Collects, appends and executes operations.
+    #[inline(always)]
+    pub(crate) fn combine<'r>(
+        &'r self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        contexts: ContextIterator<D>,
+        combiner_lock: CombinerLock<'r, D>,
+    ) -> Result<(), ReplicaError<D>> {
+        let num_registered_threads = contexts.clone().count();
+        //logging::error!("combine() num_registered_threads={num_registered_threads}");
+        let mut results = self.result.borrow_mut();
+        let mut buffer = self.buffer.borrow_mut();
+        let mut operations = self.inflight.borrow_mut();
+        results.clear();
+        buffer.clear();
+
+        self.collect_thread_ops(contexts.clone(), &mut buffer, operations.as_mut_slice());
+
+        // Append all collected operations into the shared log. We pass a closure
+        // in here because operations on the log might need to be consumed for GC.
+        let res = {
+            let mut data = self.data.write(num_registered_threads);
+            let f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
+                #[cfg(not(loom))]
+                let resp = data.dispatch_mut(o);
+                #[cfg(loom)]
+                let resp = data.dispatch_mut(o);
+                if mine {
+                    results.push(resp);
+                }
+            };
+            match slog.append(&buffer, &self.log_tkn, f) {
+                Ok(None) => Ok(()),
+                Ok(Some(r)) => {
+                    // We inserted the entries (and can apply them below), but
+                    // we want to also notify about the slow `r` so it can be
+                    // forced to make some progress
+                    Err(ReplicaError::GcFailed(r))
+                }
+                Err(r) => {
+                    // return here because we couldn't insert our entries and
+                    // need to try again later
+                    return Err(ReplicaError::NoLogSpace(r, combiner_lock));
+                }
+            }
+        };
+
+        // Execute outstanding operations on the shared log against this replica
+        {
+            let mut data = self.data.write(num_registered_threads);
+            let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
+                let resp = data.dispatch_mut(o);
+                if mine {
+                    results.push(resp)
+                }
+            };
+            slog.exec(&self.log_tkn, &mut f);
+        }
+
+        // Return/Enqueue responses back into the appropriate thread context(s).
+        let (mut s, mut f) = (0, 0);
+        for (idx, context) in contexts.enumerate() {
+            //logging::info!("enqueue_resps {idx} operations[idx]={} context={:p}", operations[idx], context);
+            if operations[idx] == 0 {
+                continue;
+            };
+
+            f += operations[idx];
+            context.enqueue_resps(&results[s..f]);
+            s += operations[idx];
+            operations[idx] = 0;
+        }
+
+        res
+    }
+}

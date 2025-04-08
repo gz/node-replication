@@ -101,32 +101,3 @@ impl AtomicBitmap {
         (self.data[idx].load(Ordering::SeqCst) & (1 << bit)) != 0
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use core::convert::TryInto;
-
-    pub fn set_correct_bit() {
-        for i in 0..(64 * 10) {
-            let my_bitmap = AtomicBitmap::default();
-            my_bitmap.set_bit(i);
-            for j in 0..(64 * 10) {
-                if j == i {
-                    assert!(my_bitmap._test_bit(i));
-                } else {
-                    assert!(!my_bitmap._test_bit(i));
-                }
-            }
-            let snapshot = my_bitmap.snapshot();
-            assert!(snapshot.len() == 5);
-            for j in 0..snapshot.len() {
-                if i / 64 == j {
-                    assert!(snapshot[j].trailing_zeros() == (64 - (i % 64)).try_into().unwrap());
-                } else {
-                    assert!(snapshot[j] == 0);
-                }
-            }
-        }
-    }
-}

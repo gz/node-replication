@@ -1191,7 +1191,7 @@ mod test {
         assert_eq!(async_ds.replicas.len(), 2);
         assert_eq!(ret, 2);
 
-        async_ds.add_replica(4).unwrap();
+        async_ds.add_replica(2).unwrap();
         assert_eq!(async_ds.replicas.len(), 3);
     }
 

@@ -23,8 +23,10 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crossbeam_utils::CachePadded;
 use static_assertions::const_assert;
 
+use super::MAX_THREADS_PER_INSTANCE;
+
 /// Maximum number of reader threads that this lock supports.
-const MAX_READER_THREADS: usize = 128;
+const MAX_READER_THREADS: usize = MAX_THREADS_PER_INSTANCE;
 const_assert!(MAX_READER_THREADS > 0);
 
 #[allow(clippy::declare_interior_mutable_const)]

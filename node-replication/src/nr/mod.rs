@@ -973,9 +973,6 @@ where
     fn try_combine(&self, tkn: ThreadToken) -> Result<(), ReplicaError<D>> {
         let r = self.select_replica(tkn);
         let contexts = self.context_iterator(r);
-        if r.replica_id() != tkn.rid {
-            contexts.active_threads.set_bit(tkn.gtid());
-        }
         r.try_combine(&self.log, contexts)
     }
 

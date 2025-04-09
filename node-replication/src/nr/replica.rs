@@ -710,7 +710,7 @@ where
             spin_loop();
         }
 
-        let mut data = self.data.write_n(self.next.load(Ordering::Relaxed)); // TODO(erika): bitmap.
+        let mut data = self.data.write(&self.thread_routing);
         let mut f = |o: <D as Dispatch>::WriteOperation, _mine: bool| {
             data.dispatch_mut(o);
         };
@@ -820,19 +820,14 @@ where
 
     #[inline(always)]
     fn exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
-        // Execute any operations on the shared log against this replica.
-        // TODO(gz, dynrep): This should probably be `num_registered_threads` aka context length? // TODO(erika): investigate.
-        let next = self.next.load(Ordering::Relaxed);
-        {
-            let mut data = self.data.write_n(next); // TODO(erika): bitmap.
-            let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
-                let _resp = data.dispatch_mut(o);
-                if mine {
-                    panic!("Ups -- we just lost a result?");
-                }
-            };
-            slog.exec(&self.log_tkn, &mut f);
-        }
+        let mut data = self.data.write(&self.thread_routing);
+        let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
+            let _resp = data.dispatch_mut(o);
+            if mine {
+                panic!("Ups -- we just lost a result?");
+            }
+        };
+        slog.exec(&self.log_tkn, &mut f);
     }
 
     #[inline(always)]

@@ -710,7 +710,7 @@ where
             spin_loop();
         }
 
-        let mut data = self.data.write(self.next.load(Ordering::Relaxed));
+        let mut data = self.data.write_n(self.next.load(Ordering::Relaxed)); // TODO(erika): bitmap.
         let mut f = |o: <D as Dispatch>::WriteOperation, _mine: bool| {
             data.dispatch_mut(o);
         };
@@ -824,7 +824,7 @@ where
         // TODO(gz, dynrep): This should probably be `num_registered_threads` aka context length? // TODO(erika): investigate.
         let next = self.next.load(Ordering::Relaxed);
         {
-            let mut data = self.data.write(next);
+            let mut data = self.data.write_n(next); // TODO(erika): bitmap.
             let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 let _resp = data.dispatch_mut(o);
                 if mine {
@@ -872,7 +872,7 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         let res = {
-            let mut data = self.data.write(num_registered_threads);
+            let mut data = self.data.write_n(num_registered_threads); // TODO(erika): bitmap.
             let f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 #[cfg(not(loom))]
                 let resp = data.dispatch_mut(o);
@@ -900,7 +900,7 @@ where
 
         // Execute outstanding operations on the shared log against this replica
         {
-            let mut data = self.data.write(num_registered_threads);
+            let mut data = self.data.write_n(num_registered_threads); // TODO(erika): bitmap.
             let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 let resp = data.dispatch_mut(o);
                 if mine {

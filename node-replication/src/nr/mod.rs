@@ -488,7 +488,7 @@ where
             // copy data from existing replica
             let replica_locked = self.replicas[&max_replica_idx].data.read(0).clone();
             // No threads are routed to this replica yet, so do not need to acquire lock
-            let new_replica_data = &mut r.data.write(replica_id);
+            let new_replica_data = &mut r.data.write_n(replica_id); // TODO(erika): bitmap.
 
             // Do clone operaiton - will be within affinity region
             **new_replica_data = replica_locked;
@@ -1542,27 +1542,27 @@ mod test {
 
         // Remove replicas until only 0th
         for r in 1..num_replicas {
-            let ret = async_ds.write(num_threads).remove_replica(r).unwrap();
+            let ret = async_ds.write_n(num_threads).remove_replica(r).unwrap();
             assert_eq!(ret, r);
             std::thread::sleep(two_seconds);
         }
 
         // Restore replicas
         for r in 1..num_replicas {
-            let _ = async_ds.write(num_threads).add_replica(r).unwrap();
+            let _ = async_ds.write_n(num_threads).add_replica(r).unwrap();
             std::thread::sleep(two_seconds);
         }
 
         // Remove - but leave last, instead of 0th
         for r in 0..(num_replicas - 1) {
-            let ret = async_ds.write(num_threads).remove_replica(r).unwrap();
+            let ret = async_ds.write_n(num_threads).remove_replica(r).unwrap();
             assert_eq!(ret, r);
             std::thread::sleep(two_seconds);
         }
 
         // Restore replicas
         for r in 0..(num_replicas - 1) {
-            let _ = async_ds.write(num_threads).add_replica(r).unwrap();
+            let _ = async_ds.write_n(num_threads).add_replica(r).unwrap();
             std::thread::sleep(two_seconds);
         }
 

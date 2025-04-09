@@ -14,6 +14,7 @@
 //! implementation which (with some modifications, see `loom_rwlock.rs`) we can
 //! use in the replica code.
 
+use crate::nr::AtomicBitmap;
 use core::cell::UnsafeCell;
 use core::default::Default;
 use core::hint::spin_loop;
@@ -118,10 +119,10 @@ where
     ///     // to perform writes against the protected data. We need to know
     ///     // the number of concurrent reader threads upfront.
     ///     const N_CONCURRENT_READERS: usize = 32;
-    ///     let mut w_guard = lock.write(N_CONCURRENT_READERS);
+    ///     let mut w_guard = lock.write_n(N_CONCURRENT_READERS);
     ///     *w_guard = 777;
     /// ```
-    pub fn write(&self, n: usize) -> WriteGuard<T> {
+    pub fn write_n(&self, n: usize) -> WriteGuard<T> {
         // First, wait until we can acquire the writer lock.
         loop {
             match self.wlock.compare_exchange_weak(
@@ -146,6 +147,39 @@ where
             spin_loop();
         }
 
+        unsafe { WriteGuard::new(self) }
+    }
+
+    pub fn write(&self, write_bitmap: &AtomicBitmap) -> WriteGuard<T> {
+        // First, wait until we can acquire the writer lock.
+        loop {
+            match self.wlock.compare_exchange_weak(
+                false,
+                true,
+                Ordering::Acquire,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(_) => continue,
+            }
+        }
+        let snapshot = write_bitmap.snapshot();
+
+        // Next, wait until all readers have released their locks. This condition
+        // evaluates to true if each reader lock is free (i.e equal to zero).
+        // We use the bitmap to determine which readers to check.
+        loop {
+            let mut done = 0;
+            for i in 0..snapshot.len() {
+                if snapshot[i] > 0 {
+                    let next_gtid = 128 * i + snapshot[i].trailing_zeros() as usize;
+                    done += self.rlock[next_gtid].load(Ordering::Relaxed);
+                }
+            }
+            if done == 0 {
+                break;
+            }
+        }
         unsafe { WriteGuard::new(self) }
     }
 
@@ -289,6 +323,7 @@ impl<T: Sized + Sync> Drop for WriteGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::{RwLock, MAX_READER_THREADS};
+    use crate::nr::atomic_bitmap::AtomicBitmap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::thread;
@@ -309,11 +344,29 @@ mod tests {
     // Tests if the mutable reference returned on acquiring a write lock
     // can be used to write to the underlying data structure.
     #[test]
-    fn test_writer_lock() {
+    fn test_writer_n_lock() {
         let lock = RwLock::<usize>::default();
         let val = 10;
 
-        let mut guard = lock.write(1);
+        let mut guard = lock.write_n(1);
+        *guard = val;
+
+        assert_eq!(lock.wlock.load(Ordering::Relaxed), true);
+        assert_eq!(lock.rlock[0].load(Ordering::Relaxed), 0);
+        assert_eq!(unsafe { *lock.data.get() }, val);
+    }
+
+    // Tests if the mutable reference returned on acquiring a write lock
+    // can be used to write to the underlying data structure.
+    #[test]
+    fn test_writer_lock() {
+        let lock = RwLock::<usize>::default();
+        let bitmap = AtomicBitmap::default();
+        bitmap.set_bit(0);
+
+        let val = 10;
+
+        let mut guard = lock.write(&bitmap);
         *guard = val;
 
         assert_eq!(lock.wlock.load(Ordering::Relaxed), true);
@@ -323,11 +376,25 @@ mod tests {
 
     // Tests if the write lock is released once a WriteGuard goes out of scope.
     #[test]
-    fn test_writer_unlock() {
+    fn test_writer_unlock_n() {
         let lock = RwLock::<usize>::default();
 
         {
-            let mut _guard = lock.write(1);
+            let mut _guard = lock.write_n(1);
+            assert_eq!(lock.wlock.load(Ordering::Relaxed), true);
+        }
+
+        assert_eq!(lock.wlock.load(Ordering::Relaxed), false);
+    }
+
+    #[test]
+    fn test_writer_unlock() {
+        let lock = RwLock::<usize>::default();
+        let bitmap = AtomicBitmap::default();
+        bitmap.set_bit(0);
+
+        {
+            let mut _guard = lock.write(&bitmap);
             assert_eq!(lock.wlock.load(Ordering::Relaxed), true);
         }
 
@@ -389,15 +456,15 @@ mod tests {
     // Tests that multiple writers and readers whose scopes don't interfere can
     // acquire the lock.
     #[test]
-    fn test_lock_combinations() {
+    fn test_lock_combinations_n() {
         let l = RwLock::<usize>::default();
 
         {
-            let _g = l.write(2);
+            let _g = l.write_n(2);
         }
 
         {
-            let _g = l.write(2);
+            let _g = l.write_n(2);
         }
 
         {
@@ -406,13 +473,40 @@ mod tests {
         }
 
         {
-            let _g = l.write(2);
+            let _g = l.write_n(2);
+        }
+    }
+
+    // Tests that multiple writers and readers whose scopes don't interfere can
+    // acquire the lock.
+    #[test]
+    fn test_lock_combinations() {
+        let l = RwLock::<usize>::default();
+        let bitmap = AtomicBitmap::default();
+        bitmap.set_bit(0);
+        bitmap.set_bit(1);
+
+        {
+            let _g = l.write(&bitmap);
+        }
+
+        {
+            let _g = l.write(&bitmap);
+        }
+
+        {
+            let _f = l.read(0);
+            let _s = l.read(1);
+        }
+
+        {
+            let _g = l.write(&bitmap);
         }
     }
 
     // Tests that writes to the underlying data structure are atomic.
     #[test]
-    fn test_atomic_writes() {
+    fn test_atomic_writes_n() {
         let lock = Arc::new(RwLock::<usize>::default());
         let t = 100;
 
@@ -420,7 +514,39 @@ mod tests {
         for _i in 0..t {
             let l = lock.clone();
             let child = thread::spawn(move || {
-                let mut ele = l.write(t);
+                let mut ele = l.write_n(t);
+                *ele += 1;
+            });
+            threads.push(child);
+        }
+
+        for _i in 0..threads.len() {
+            let _retval = threads
+                .pop()
+                .unwrap()
+                .join()
+                .expect("Thread didn't finish successfully.");
+        }
+
+        assert_eq!(unsafe { *lock.data.get() }, t);
+    }
+
+    // Tests that writes to the underlying data structure are atomic.
+    #[test]
+    fn test_atomic_writes() {
+        let lock = Arc::new(RwLock::<usize>::default());
+        let t = 100;
+        let bitmap = AtomicBitmap::default();
+        for i in 0..t {
+            bitmap.set_bit(i);
+        }
+
+        let mut threads = Vec::new();
+        for _i in 0..t {
+            let l = lock.clone();
+            let bitmap = bitmap.clone();
+            let child = thread::spawn(move || {
+                let mut ele = l.write(&bitmap);
                 *ele += 1;
             });
             threads.push(child);
@@ -493,13 +619,35 @@ mod tests {
     // done so.
     #[test]
     #[should_panic(expected = "This test should always panic")]
-    fn test_reader_after_writer() {
+    fn test_reader_after_writer_n() {
         let lock = RwLock::<usize>::default();
         let shared = Arc::new(AtomicUsize::new(0));
 
         let s = shared.clone();
         let lock_thread = thread::spawn(move || {
-            let _w = lock.write(1);
+            let _w = lock.write_n(1);
+            let _r = lock.read(0);
+            s.store(1, Ordering::SeqCst);
+        });
+
+        thread::sleep(std::time::Duration::from_secs(2));
+        if shared.load(Ordering::SeqCst) == 0 {
+            panic!("This test should always panic");
+        }
+        lock_thread.join().unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "This test should always panic")]
+    fn test_reader_after_writer() {
+        let lock = RwLock::<usize>::default();
+        let shared = Arc::new(AtomicUsize::new(0));
+        let bitmap = AtomicBitmap::default();
+        bitmap.set_bit(0);
+
+        let s = shared.clone();
+        let lock_thread = thread::spawn(move || {
+            let _w = lock.write(&bitmap);
             let _r = lock.read(0);
             s.store(1, Ordering::SeqCst);
         });
@@ -522,14 +670,36 @@ mod tests {
     // done so.
     #[test]
     #[should_panic(expected = "This test should always panic")]
-    fn test_writer_after_reader() {
+    fn test_writer_after_reader_n() {
         let lock = RwLock::<usize>::default();
         let shared = Arc::new(AtomicUsize::new(0));
 
         let s = shared.clone();
         let lock_thread = thread::spawn(move || {
             let _r = lock.read(0);
-            let _w = lock.write(1);
+            let _w = lock.write_n(1);
+            s.store(1, Ordering::SeqCst);
+        });
+
+        thread::sleep(std::time::Duration::from_secs(2));
+        if shared.load(Ordering::SeqCst) == 0 {
+            panic!("This test should always panic");
+        }
+        lock_thread.join().unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "This test should always panic")]
+    fn test_writer_after_reader() {
+        let lock = RwLock::<usize>::default();
+        let shared = Arc::new(AtomicUsize::new(0));
+        let bitmap = AtomicBitmap::default();
+        bitmap.set_bit(0);
+
+        let s = shared.clone();
+        let lock_thread = thread::spawn(move || {
+            let _r = lock.read(0);
+            let _w = lock.write(&bitmap);
             s.store(1, Ordering::SeqCst);
         });
 
@@ -551,14 +721,36 @@ mod tests {
     // done so.
     #[test]
     #[should_panic(expected = "This test should always panic")]
-    fn test_writer_after_writer() {
+    fn test_writer_after_writer_n() {
         let lock = RwLock::<usize>::default();
         let shared = Arc::new(AtomicUsize::new(0));
 
         let s = shared.clone();
         let lock_thread = thread::spawn(move || {
-            let _f = lock.write(1);
-            let _s = lock.write(1);
+            let _f = lock.write_n(1);
+            let _s = lock.write_n(1);
+            s.store(1, Ordering::SeqCst);
+        });
+
+        thread::sleep(std::time::Duration::from_secs(2));
+        if shared.load(Ordering::SeqCst) == 0 {
+            panic!("This test should always panic");
+        }
+        lock_thread.join().unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "This test should always panic")]
+    fn test_writer_after_writer() {
+        let lock = RwLock::<usize>::default();
+        let shared = Arc::new(AtomicUsize::new(0));
+        let bitmap = AtomicBitmap::default();
+        bitmap.set_bit(0);
+
+        let s = shared.clone();
+        let lock_thread = thread::spawn(move || {
+            let _f = lock.write(&bitmap);
+            let _s = lock.write(&bitmap);
             s.store(1, Ordering::SeqCst);
         });
 

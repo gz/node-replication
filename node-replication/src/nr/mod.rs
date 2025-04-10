@@ -519,7 +519,7 @@ where
                     self.log.lmasks[replica_id].get()
                 );
 
-                if !self.log.add_log_replica(log_token).is_ok() {
+                if self.log.add_log_replica(log_token).is_err() {
                     return Err(NodeReplicatedError::DuplicateReplica);
                 }
                 // Drop read/write locks
@@ -749,7 +749,9 @@ where
                         {
                             assert_ne!(stuck_ridx, tkn.rid);
                             let _aftkn = self.affinity_mngr.switch(stuck_ridx);
-                            self.replicas.get(&stuck_ridx).map(|r| r.sync(&self.log));
+                            if let Some(r) = self.replicas.get(&stuck_ridx) {
+                                r.sync(&self.log)
+                            }
                             // Affinity is reverted here, _aftkn is dropped.
                         }
 
@@ -765,7 +767,9 @@ where
                     debug_assert_ne!(ridx, tkn.rid);
                     //warn!("execute_mut ResolveOp::Sync {}", ridx);
                     let _aftkn = self.affinity_mngr.switch(ridx);
-                    self.replicas.get(&ridx).map(|r| r.try_sync(&self.log));
+                    if let Some(r) = self.replicas.get(&ridx) {
+                        r.try_sync(&self.log)
+                    }
                     // _aftkn is dropped here, reverting affinity change
                 }
             }
@@ -877,7 +881,9 @@ where
                     // Holds trivially because of all the other asserts in this function
                     debug_assert_ne!(ridx, tkn.rid);
                     let _aftkn = self.affinity_mngr.switch(ridx);
-                    self.replicas.get(&ridx).map(|r| r.try_sync(&self.log));
+                    if let Some(r) = self.replicas.get(&ridx) {
+                        r.try_sync(&self.log)
+                    }
                     // _aftkn is dropped here, reverting affinity change
                 }
             }

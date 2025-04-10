@@ -324,7 +324,7 @@ impl From<alloc::collections::TryReserveError> for NodeReplicatedError {
 /// which are behind automatically.
 pub struct NodeReplicated<D: Dispatch + Sync + Clone> {
     log: Log<D::WriteOperation>,
-    replicas: BTreeMap<usize, Replica<D>>,
+    pub replicas: BTreeMap<usize, Replica<D>>,
     /// List of per-thread contexts. Threads buffer write operations here when
     /// they cannot perform flat combining (because another thread might already
     /// be doing so).
@@ -333,7 +333,6 @@ pub struct NodeReplicated<D: Dispatch + Sync + Clone> {
     /// [`MAX_THREADS_PER_REPLICA`] [`Context`] elements.
     contexts: Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
     affinity_mngr: AffinityManager,
-    thread_routing_inactive: [Option<AtomicBitmap>; MAX_REPLICAS_PER_LOG],
 }
 
 impl<D> NodeReplicated<D>
@@ -431,7 +430,7 @@ where
             let r = {
                 // Allocate the replica on the proper NUMA node
                 let _aff_tkn = affinity_mngr.switch(replica_id);
-                Replica::new(log_token, None)
+                Replica::new(log_token)
                 // aff_tkn is dropped here
             };
 
@@ -443,9 +442,29 @@ where
             contexts,
             log,
             replicas,
-            thread_routing_inactive: [NO_BITMAP; MAX_REPLICAS_PER_LOG],
             affinity_mngr,
         })
+    }
+
+    fn reroute_threads(&mut self) {
+        for (_rid, r) in self.replicas.iter() {
+            for gtid in 0..640 {
+                if r.thread_routing._test_bit(gtid) {
+                    let ttkn = ThreadToken::new(
+                        gtid / MAX_THREADS_PER_REPLICA,
+                        ReplicaToken(gtid % MAX_THREADS_PER_REPLICA),
+                    );
+                    assert!(ttkn.gtid() == gtid); // TODO(erika): could be debug assert
+                    let correct_replica = self.select_replica(ttkn);
+
+                    // Route correctly if wrong
+                    if correct_replica.replica_id() != r.replica_id() {
+                        r.thread_routing.clear_bit(gtid);
+                        correct_replica.thread_routing.set_bit(gtid);
+                    }
+                }
+            }
+        }
     }
 
     /// Adds a new replica to the NodeReplicated. It returns the index of the added replica within
@@ -473,51 +492,47 @@ where
         }
 
         let log_token = log::LogToken(replica_id + 1);
-
-        // Allocate the replica on the proper NUMA node
-        let _aff_tkn = self.affinity_mngr.switch(replica_id);
-        let r = Replica::new(
-            log_token.clone(),
-            self.thread_routing_inactive[replica_id].clone(),
-        );
-
-        // get the most up to date replica
-        let (max_replica_idx, max_local_tail) = self.log.find_max_tail();
-
         {
-            // copy data from existing replica
-            let replica_locked = self.replicas[&max_replica_idx].data.read(0).clone();
-            // No threads are routed to this replica yet, so do not need to acquire lock
-            let new_replica_data = &mut r.data.write_n(replica_id); // TODO(erika): bitmap.
+            // Allocate the replica on the proper NUMA node
+            let _aff_tkn = self.affinity_mngr.switch(replica_id);
+            let r = Replica::new(log_token.clone());
 
-            // Do clone operaiton - will be within affinity region
-            **new_replica_data = replica_locked;
+            // get the most up to date replica
+            let (max_replica_idx, max_local_tail) = self.log.find_max_tail();
 
-            // push ltail entry for new replica
-            self.log.ltails[replica_id].store(max_local_tail, Ordering::Relaxed);
+            {
+                // copy data from existing replica
+                let replica_locked = self.replicas[&max_replica_idx].data.read(0).clone();
+                // No threads are routed to this replica yet, so do not need to acquire lock
+                let new_replica_data = &mut r.data.write_n(replica_id); // TODO(erika): bitmap.
 
-            // find and push existing lmask entry for new replica
-            let lmask_status = self.log.lmasks[max_replica_idx].get();
-            self.log.lmasks[replica_id].set(lmask_status);
-            logging::debug!(
-                "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks[replica_id].get() {:?}",
-                self.log.lmasks[replica_id].get()
-            );
+                // Do clone operaiton - will be within affinity region
+                **new_replica_data = replica_locked;
 
-            if !self.log.add_log_replica(log_token).is_ok() {
-                return Err(NodeReplicatedError::DuplicateReplica);
+                // push ltail entry for new replica
+                self.log.ltails[replica_id].store(max_local_tail, Ordering::Relaxed);
+
+                // find and push existing lmask entry for new replica
+                let lmask_status = self.log.lmasks[max_replica_idx].get();
+                self.log.lmasks[replica_id].set(lmask_status);
+                logging::debug!(
+                    "max_replica_idx={max_replica_idx} replica_id={replica_id} self.log.lmasks[replica_id].get() {:?}",
+                    self.log.lmasks[replica_id].get()
+                );
+
+                if !self.log.add_log_replica(log_token).is_ok() {
+                    return Err(NodeReplicatedError::DuplicateReplica);
+                }
+                // Drop read/write locks
             }
-            // Drop read/write locks
-        }
 
-        logging::debug!("Adding replica {replica_id}");
-        match self.replicas.insert(replica_id, r) {
-            Some(_) => {
+            logging::debug!("Adding replica {replica_id}");
+            if self.replicas.insert(replica_id, r).is_some() {
                 panic!("If we were able to call add_log_replica successfully, there should be no duplicate here!");
             }
-            None => Ok(()),
-        }
-        // aff_tkn is dropped at return of function
+        } // aff_tkn is dropped at return of function
+        self.reroute_threads();
+        Ok(())
     }
 
     pub fn remove_replica(
@@ -531,14 +546,26 @@ where
 
         match self.replicas.remove(&replica_id) {
             Some(r) => {
-                // Save thread routing state for later
-                self.thread_routing_inactive[replica_id] = Some(r.thread_routing.clone());
-
                 // The results are stored within the contexts, which are NOT deleted with the replica
                 // so we don't have to worry about them.
                 self.log
                     .remove_log_replica(log::LogToken(replica_id + 1))
                     .expect("If replica was found, we should be able to remove it.");
+                self.reroute_threads();
+
+                // Route all threads previously routed to this replica to other replicas
+                // reroute threads can't see these any more, so it's a separate step.
+                for gtid in 0..640 {
+                    if r.thread_routing._test_bit(gtid) {
+                        let ttkn = ThreadToken::new(
+                            gtid / MAX_THREADS_PER_REPLICA,
+                            ReplicaToken(gtid % MAX_THREADS_PER_REPLICA),
+                        );
+                        assert!(ttkn.gtid() == gtid); // TODO(erika): could be debug assert
+                        let correct_replica = self.select_replica(ttkn);
+                        correct_replica.thread_routing.set_bit(gtid);
+                    }
+                }
 
                 Ok(replica_id)
             }
@@ -619,6 +646,8 @@ where
         cl: Option<CombinerLock<'a, D>>,
     ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         let r = self.select_replica(tkn);
+        assert!(r.thread_routing._test_bit(tkn.gtid())); // TODO(erika): could be debug assert
+
         //logging::info!("try_execute_mut selected replica {} from tkn {:?}", rid, tkn);
         let contexts = self.context_iterator(r);
 
@@ -752,6 +781,8 @@ where
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
         let r = self.select_replica(tkn);
+        assert!(r.thread_routing._test_bit(tkn.gtid())); // TODO(erika): could be debug assert
+
         let contexts = self.context_iterator(r);
 
         if let Some(combiner_lock) = cl {
@@ -1194,7 +1225,7 @@ mod test {
 
     #[test]
     fn test_remove_replica_returns_replica_id() {
-        let replicas = NonZeroUsize::new(1).unwrap();
+        let replicas = NonZeroUsize::new(2).unwrap();
         let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
         let _ = async_ds.register(0).expect("Unable to register with log");
         let replica_id = async_ds.remove_replica(0);
@@ -1404,6 +1435,128 @@ mod test {
 
         assert_eq!(107, async_ds.execute_mut(121, ttkn_a).unwrap());
         assert_eq!(1, async_ds.execute(11, ttkn_a).unwrap());
+    }
+
+    // Tests whether we can add/remove but keep threads across replica registered to just one replica
+    #[test]
+    fn test_thread_routing() {
+        let replicas = NonZeroUsize::new(3).unwrap();
+        let mut async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
+
+        let ttkn_a = async_ds.register(0).expect("Unable to register with log");
+        let ttkn_b = async_ds.register(1).expect("Unable to register with log");
+        let ttkn_c = async_ds.register(2).expect("Unable to register with log");
+
+        assert!(async_ds.replicas[&0]
+            .thread_routing
+            ._test_bit(ttkn_a.gtid()));
+        assert!(!async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_a.gtid()));
+        assert!(!async_ds.replicas[&2]
+            .thread_routing
+            ._test_bit(ttkn_a.gtid()));
+
+        assert!(async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_b.gtid()));
+        assert!(!async_ds.replicas[&0]
+            .thread_routing
+            ._test_bit(ttkn_b.gtid()));
+        assert!(!async_ds.replicas[&2]
+            .thread_routing
+            ._test_bit(ttkn_b.gtid()));
+
+        assert!(async_ds.replicas[&2]
+            .thread_routing
+            ._test_bit(ttkn_c.gtid()));
+        assert!(!async_ds.replicas[&0]
+            .thread_routing
+            ._test_bit(ttkn_c.gtid()));
+        assert!(!async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_c.gtid()));
+
+        let ret = async_ds.remove_replica(0).unwrap();
+        assert_eq!(ret, 0);
+
+        // ttkn a redirected to either 1 or 2 but not both
+        assert!(
+            (async_ds.replicas[&1]
+                .thread_routing
+                ._test_bit(ttkn_a.gtid())
+                && !async_ds.replicas[&2]
+                    .thread_routing
+                    ._test_bit(ttkn_a.gtid()))
+                || (!async_ds.replicas[&1]
+                    .thread_routing
+                    ._test_bit(ttkn_a.gtid())
+                    && async_ds.replicas[&2]
+                        .thread_routing
+                        ._test_bit(ttkn_a.gtid()))
+        );
+        // other routing stays the same
+        assert!(async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_b.gtid()));
+        assert!(!async_ds.replicas[&2]
+            .thread_routing
+            ._test_bit(ttkn_b.gtid()));
+        assert!(async_ds.replicas[&2]
+            .thread_routing
+            ._test_bit(ttkn_c.gtid()));
+        assert!(!async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_c.gtid()));
+
+        let ret = async_ds.remove_replica(2).unwrap();
+        assert_eq!(ret, 2);
+
+        // check all routed to remaining replica
+        assert!(async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_a.gtid()));
+        assert!(async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_b.gtid()));
+        assert!(async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_c.gtid()));
+
+        // re-add replicas
+        let _ = async_ds.add_replica(0).unwrap();
+        let _ = async_ds.add_replica(2).unwrap();
+
+        // revert to original routing state
+        assert!(async_ds.replicas[&0]
+            .thread_routing
+            ._test_bit(ttkn_a.gtid()));
+        assert!(!async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_a.gtid()));
+        assert!(!async_ds.replicas[&2]
+            .thread_routing
+            ._test_bit(ttkn_a.gtid()));
+
+        assert!(async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_b.gtid()));
+        assert!(!async_ds.replicas[&0]
+            .thread_routing
+            ._test_bit(ttkn_b.gtid()));
+        assert!(!async_ds.replicas[&2]
+            .thread_routing
+            ._test_bit(ttkn_b.gtid()));
+
+        assert!(async_ds.replicas[&2]
+            .thread_routing
+            ._test_bit(ttkn_c.gtid()));
+        assert!(!async_ds.replicas[&0]
+            .thread_routing
+            ._test_bit(ttkn_c.gtid()));
+        assert!(!async_ds.replicas[&1]
+            .thread_routing
+            ._test_bit(ttkn_c.gtid()));
     }
 
     // Tests whether we can issue a read-only operation against the replica.

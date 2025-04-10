@@ -234,10 +234,10 @@ where
     ///
     /// // Create a replica that uses the above log.
     /// let ltkn = log.register().unwrap();
-    /// let replica = Replica::<Data>::new(ltkn, None);
+    /// let replica = Replica::<Data>::new(ltkn);
     /// ```
-    pub fn new(log_tkn: LogToken, previous_routing: Option<AtomicBitmap>) -> Replica<D> {
-        Replica::with_data(log_tkn, Default::default(), previous_routing)
+    pub fn new(log_tkn: LogToken) -> Replica<D> {
+        Replica::with_data(log_tkn, Default::default())
     }
 }
 
@@ -310,29 +310,11 @@ where
     ///   [`Copy`] of `d` is passed to every Replica object of the replicated
     ///   data-structure. If not, operations when executed on different replicas
     ///   may give different results.
-    pub fn with_data(
-        log_tkn: LogToken,
-        d: D,
-        previous_routing: Option<AtomicBitmap>,
-    ) -> Replica<D> {
-        let (next, thread_routing) = match previous_routing {
-            Some(bitmap) => {
-                let mut max_thread_id = 0;
-                // TODO: this is not adequately tested
-                for i in 0..MAX_THREADS_PER_REPLICA {
-                    if bitmap._test_bit(log_tkn.0 * MAX_THREADS_PER_REPLICA + i) {
-                        max_thread_id = i;
-                    }
-                }
-                // Clone bitmap to ensure it is allocated in same affinity that replica is created.
-                (max_thread_id, bitmap.clone())
-            }
-            None => (0, DEFAULT_BITMAP),
-        };
+    pub fn with_data(log_tkn: LogToken, d: D) -> Replica<D> {
         Replica {
             log_tkn,
             combiner: CachePadded::new(AtomicUsize::new(0)),
-            next: CachePadded::new(AtomicUsize::new(next.try_into().unwrap())),
+            next: CachePadded::new(AtomicUsize::new(0)),
             buffer:
                 RefCell::new(
                     Vec::with_capacity(
@@ -355,7 +337,7 @@ where
                     ),
                 ),
             data: CachePadded::new(RwLock::<D>::new(d)),
-            thread_routing,
+            thread_routing: DEFAULT_BITMAP,
         }
     }
 
@@ -402,7 +384,7 @@ where
     ///
     /// let log = Log::<<Data as Dispatch>::WriteOperation>::default();
     /// let logtkn = log.register().unwrap();
-    /// let replica = Replica::<Data>::new(logtkn, None);
+    /// let replica = Replica::<Data>::new(logtkn);
     ///
     /// // Calling register() returns a thread token that can be used to execute
     /// // operations against the replica.
@@ -429,6 +411,10 @@ where
             let rtkn = ReplicaToken(idx);
             // LogToken and ReplicaId are off by one
             let ttkn = ThreadToken::new(self.replica_id(), rtkn);
+
+            if self.thread_routing._test_bit(ttkn.gtid()) {
+                continue;
+            }
 
             self.thread_routing.set_bit(ttkn.gtid());
             return Some(ttkn);
@@ -489,7 +475,7 @@ where
     ///
     /// let log = Log::<<Data as Dispatch>::WriteOperation>::default();
     /// let logtkn = log.register().unwrap();
-    /// let replica = Replica::<Data>::new(logtkn, None);
+    /// let replica = Replica::<Data>::new(logtkn);
     /// let thrtkn = replica.register().expect("Failed to register with replica.");
     ///
     /// // execute_mut() can be used to write to the replicated data structure.
@@ -582,7 +568,7 @@ where
     ///
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
     /// let logtkn = log.register().unwrap();
-    /// let replica = Replica::<Data>::new(logtkn, None);
+    /// let replica = Replica::<Data>::new(logtkn);
     /// let thrtkn = replica.register().expect("Failed to register with replica.");
     /// // TODO(hunhoffe): fix below document code
     /// // let _wr = replica.execute_mut(&log, 100, thrtkn);
@@ -954,7 +940,7 @@ pub(crate) mod test {
     fn test_replica_create() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt, None);
+        let repl = Replica::<Data>::new(lt);
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.next.load(Ordering::SeqCst), 0);
         //assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
@@ -975,7 +961,7 @@ pub(crate) mod test {
     fn test_replica_register() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt, None);
+        let repl = Replica::<Data>::new(lt);
         assert_eq!(repl.register(), Some(ThreadToken::new(0, ReplicaToken(0))));
         assert_eq!(repl.next.load(Ordering::SeqCst), 1);
         repl.next.store(17, Ordering::SeqCst);
@@ -988,7 +974,7 @@ pub(crate) mod test {
     fn test_replica_register_none() {
         let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt, None);
+        let repl = Replica::<Data>::new(lt);
         repl.next
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
         assert!(repl.register().is_none());

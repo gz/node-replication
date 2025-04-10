@@ -932,10 +932,11 @@ where
         resp.set(async move { self.execute(op, tkn) });
     }
 
+    #[inline(always)]
     fn select_replica(&self, tkn: ThreadToken) -> &Replica<D> {
         match self.replicas.get(&tkn.rid) {
             Some(r) => {
-                debug_assert!(tkn.rid == r.replica_id()); // TODO(erika): make debug
+                debug_assert!(tkn.rid == r.replica_id());
                 r
             }
             None => {
@@ -995,6 +996,7 @@ where
 
         // Keep trying to retrieve a response from the thread context. After trying `interval`
         // times with no luck, try to perform flat combining to make some progress.
+        let replica = self.select_replica(tkn);
         loop {
             let r = self.contexts[tkn.gtid()].res();
             //logging::info!("after res");
@@ -1012,24 +1014,27 @@ where
                     tkn,
                     &self.contexts[tkn.gtid()]
                 );
-                let _r: () = self.try_combine(tkn).unwrap();
+                let _r: () = self.try_combine(&replica).unwrap();
                 iter = 0;
             }
         }
     }
 
     #[doc(hidden)]
-    fn try_combine(&self, tkn: ThreadToken) -> Result<(), ReplicaError<D>> {
-        let r = self.select_replica(tkn);
+    #[inline(always)]
+    fn try_combine<'a>(&'a self, r: &'a Replica<D>) -> Result<(), ReplicaError<D>> {
         let contexts = self.context_iterator(r);
         r.try_combine(&self.log, contexts)
     }
 
+    /*
     #[doc(hidden)]
     pub fn sync(&self, tkn: ThreadToken) {
+        // TODO(erika): select replica without affinity change?
         let r = self.select_replica(tkn);
         r.sync(&self.log)
     }
+    */
 }
 
 #[derive(Clone)]
@@ -1381,7 +1386,7 @@ mod test {
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
 
         assert!(async_ds.make_pending(121, ttkn_a.gtid()));
-        assert!(async_ds.try_combine(ttkn_a).is_ok());
+        assert!(async_ds.try_combine(&async_ds.replicas[&0]).is_ok());
 
         assert_eq!(async_ds.replicas[&0].combiner.load(Ordering::SeqCst), 0);
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 1);
@@ -1398,7 +1403,7 @@ mod test {
 
         async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
         assert!(async_ds.make_pending(121, ttkn_a.gtid()));
-        assert!(async_ds.try_combine(ttkn_a).is_ok());
+        assert!(async_ds.try_combine(&async_ds.replicas[&0]).is_ok());
 
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 1);
         assert_eq!(async_ds.contexts[0].res(), Some(Ok(107)));
@@ -1415,7 +1420,7 @@ mod test {
         async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
         async_ds.replicas[&0].combiner.store(8, Ordering::SeqCst);
         assert!(async_ds.make_pending(121, ttkn_a.gtid()));
-        assert!(async_ds.try_combine(ttkn_a).is_ok());
+        assert!(async_ds.try_combine(&async_ds.replicas[&0]).is_ok());
 
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 0);
         assert_eq!(async_ds.contexts[0].res(), None);

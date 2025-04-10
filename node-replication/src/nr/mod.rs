@@ -491,7 +491,7 @@ where
         }
 
         let log_token = log::LogToken(replica_id + 1);
-        {
+        let r = {
             // Allocate the replica on the proper NUMA node
             let _aff_tkn = self.affinity_mngr.switch(replica_id);
             let r = Replica::new(log_token.clone());
@@ -524,12 +524,13 @@ where
                 }
                 // Drop read/write locks
             }
+            r
+        }; // aff_tkn is dropped at return of function
+        logging::debug!("Adding replica {replica_id}");
+        if self.replicas.insert(replica_id, r).is_some() {
+            panic!("If we were able to call add_log_replica successfully, there should be no duplicate here!");
+        }
 
-            logging::debug!("Adding replica {replica_id}");
-            if self.replicas.insert(replica_id, r).is_some() {
-                panic!("If we were able to call add_log_replica successfully, there should be no duplicate here!");
-            }
-        } // aff_tkn is dropped at return of function
         self.reroute_threads();
         Ok(())
     }
@@ -646,17 +647,20 @@ where
     ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         let r = self.select_replica(tkn);
         debug_assert!(r.thread_routing._test_bit(tkn.gtid()));
+        {
+            let _aftkn = self.affinity_mngr.switch(r.replica_id());
 
-        //logging::info!("try_execute_mut selected replica {} from tkn {:?}", rid, tkn);
-        let contexts = self.context_iterator(r);
+            //logging::info!("try_execute_mut selected replica {} from tkn {:?}", rid, tkn);
+            let contexts = self.context_iterator(r);
 
-        if let Some(combiner_lock) = cl {
-            // We expect to have already enqueued the op (it's a re-try since have the combiner lock),
-            // so technically its not needed to supply it again (but we currently do it anyways...)
-            r.execute_mut_locked(&self.log, contexts, combiner_lock)?;
-        } else {
-            r.execute_mut(&self.log, contexts)?;
-        }
+            if let Some(combiner_lock) = cl {
+                // We expect to have already enqueued the op (it's a re-try since have the combiner lock),
+                // so technically its not needed to supply it again (but we currently do it anyways...)
+                r.execute_mut_locked(&self.log, contexts, combiner_lock)?;
+            } else {
+                r.execute_mut(&self.log, contexts)?;
+            }
+        } // aftkn dropped
 
         Ok(self.get_response(tkn))
     }
@@ -717,8 +721,6 @@ where
         tkn: ThreadToken,
     ) -> <D as Dispatch>::Response {
         //logging::info!("execute mut on {:?}", tkn);
-        let _aftkn = self.affinity_mngr.switch(tkn.rid);
-
         while !self.make_pending(op.clone(), tkn.gtid()) {}
 
         /// An enum to keep track of a stack of operations we should do on Replicas.
@@ -748,9 +750,11 @@ where
                     Err(ReplicaError::GcFailed(stuck_ridx)) => {
                         {
                             assert_ne!(stuck_ridx, tkn.rid);
-                            let _aftkn = self.affinity_mngr.switch(stuck_ridx);
                             if let Some(r) = self.replicas.get(&stuck_ridx) {
+                                let _aftkn = self.affinity_mngr.switch(stuck_ridx);
                                 r.sync(&self.log)
+                            } else {
+                                panic!("Replica not found??");
                             }
                             // Affinity is reverted here, _aftkn is dropped.
                         }
@@ -766,9 +770,11 @@ where
                     // Holds trivially because of all the other asserts in this function
                     debug_assert_ne!(ridx, tkn.rid);
                     //warn!("execute_mut ResolveOp::Sync {}", ridx);
-                    let _aftkn = self.affinity_mngr.switch(ridx);
                     if let Some(r) = self.replicas.get(&ridx) {
+                        let _aftkn = self.affinity_mngr.switch(ridx);
                         r.try_sync(&self.log)
+                    } else {
+                        panic!("Replica not found??");
                     }
                     // _aftkn is dropped here, reverting affinity change
                 }
@@ -787,12 +793,14 @@ where
         debug_assert!(r.thread_routing._test_bit(tkn.gtid()));
 
         let contexts = self.context_iterator(r);
-
-        if let Some(combiner_lock) = cl {
-            r.execute_locked(&self.log, op, tkn.rtkn, contexts, combiner_lock)
-        } else {
-            r.execute(&self.log, op, contexts, tkn.rtkn)
-        }
+        {
+            let _aftkn = self.affinity_mngr.switch(r.replica_id());
+            if let Some(combiner_lock) = cl {
+                r.execute_locked(&self.log, op, tkn.rtkn, contexts, combiner_lock)
+            } else {
+                r.execute(&self.log, op, contexts, tkn.rtkn)
+            }
+        } // drop aftkn
     }
 
     /// Executes a immutable operation against the data-structure.
@@ -883,6 +891,8 @@ where
                     let _aftkn = self.affinity_mngr.switch(ridx);
                     if let Some(r) = self.replicas.get(&ridx) {
                         r.try_sync(&self.log)
+                    } else {
+                        panic!("Replica not found??");
                     }
                     // _aftkn is dropped here, reverting affinity change
                 }
@@ -924,7 +934,10 @@ where
 
     fn select_replica(&self, tkn: ThreadToken) -> &Replica<D> {
         match self.replicas.get(&tkn.rid) {
-            Some(r) => r,
+            Some(r) => {
+                debug_assert!(tkn.rid == r.replica_id()); // TODO(erika): make debug
+                r
+            }
             None => {
                 let key_idx = tkn.rtkn.0 % self.replicas.len();
                 self.replicas

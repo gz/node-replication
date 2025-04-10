@@ -9,7 +9,6 @@
 
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::convert::TryInto;
 use core::fmt::{self, Debug};
 use core::hint::spin_loop;
 #[cfg(not(loom))]

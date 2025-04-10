@@ -437,7 +437,6 @@ where
             replicas.insert(replica_id, r);
         }
 
-        const NO_BITMAP: Option<AtomicBitmap> = None;
         Ok(NodeReplicated {
             contexts,
             log,

@@ -107,22 +107,24 @@ mod test {
     use super::*;
     use core::convert::TryInto;
 
-    pub fn set_correct_bit() {
+    #[test]
+    pub fn test_set_correct_bit() {
         for i in 0..(64 * 10) {
             let my_bitmap = AtomicBitmap::default();
             my_bitmap.set_bit(i);
             for j in 0..(64 * 10) {
                 if j == i {
-                    assert!(my_bitmap._test_bit(i));
+                    assert!(my_bitmap._test_bit(j));
                 } else {
-                    assert!(!my_bitmap._test_bit(i));
+                    assert!(!my_bitmap._test_bit(j));
                 }
             }
+
             let snapshot = my_bitmap.snapshot();
             assert!(snapshot.len() == 5);
             for j in 0..snapshot.len() {
-                if i / 64 == j {
-                    assert!(snapshot[j].trailing_zeros() == (64 - (i % 64)).try_into().unwrap());
+                if i / 128 == j {
+                    assert!(i == 128 * j + snapshot[j].trailing_zeros() as usize);
                 } else {
                     assert!(snapshot[j] == 0);
                 }

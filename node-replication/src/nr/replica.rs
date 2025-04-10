@@ -585,7 +585,7 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation<'rop>,
         contexts: ContextIterator<D>,
-        idx: ReplicaToken,
+        idx: ThreadToken,
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
         // We can perform the read only if our replica is synced up against
@@ -598,7 +598,7 @@ where
             spin_loop();
         }
 
-        return Ok(self.data.read(idx.tid()).dispatch(op));
+        return Ok(self.data.read(idx.gtid()).dispatch(op));
     }
 
     /// See [`Replica::execute()`] for a general description of this method.
@@ -615,7 +615,7 @@ where
         &'lock self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation<'rop>,
-        idx: ReplicaToken,
+        idx: ThreadToken,
         contexts: ContextIterator<D>,
         combiner_lock: CombinerLock<'lock, D>,
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
@@ -639,7 +639,7 @@ where
             spin_loop();
         }
 
-        Ok(self.data.read(idx.tid()).dispatch(op))
+        Ok(self.data.read(idx.gtid()).dispatch(op))
     }
 
     /*

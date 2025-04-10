@@ -447,13 +447,13 @@ where
 
     fn reroute_threads(&mut self) {
         for (_rid, r) in self.replicas.iter() {
-            for gtid in 0..640 {
+            for gtid in 0..MAX_THREADS_PER_INSTANCE {
                 if r.thread_routing._test_bit(gtid) {
                     let ttkn = ThreadToken::new(
                         gtid / MAX_THREADS_PER_REPLICA,
                         ReplicaToken(gtid % MAX_THREADS_PER_REPLICA),
                     );
-                    assert!(ttkn.gtid() == gtid); // TODO(erika): could be debug assert
+                    debug_assert!(ttkn.gtid() == gtid);
                     let correct_replica = self.select_replica(ttkn);
 
                     // Route correctly if wrong
@@ -503,7 +503,7 @@ where
                 // copy data from existing replica
                 let replica_locked = self.replicas[&max_replica_idx].data.read(0).clone();
                 // No threads are routed to this replica yet, so do not need to acquire lock
-                let new_replica_data = &mut r.data.write_n(replica_id); // TODO(erika): bitmap.
+                let new_replica_data = &mut r.data.write_n(replica_id);
 
                 // Do clone operaiton - will be within affinity region
                 **new_replica_data = replica_locked;
@@ -554,13 +554,13 @@ where
 
                 // Route all threads previously routed to this replica to other replicas
                 // reroute threads can't see these any more, so it's a separate step.
-                for gtid in 0..640 {
+                for gtid in 0..MAX_THREADS_PER_INSTANCE {
                     if r.thread_routing._test_bit(gtid) {
                         let ttkn = ThreadToken::new(
                             gtid / MAX_THREADS_PER_REPLICA,
                             ReplicaToken(gtid % MAX_THREADS_PER_REPLICA),
                         );
-                        assert!(ttkn.gtid() == gtid); // TODO(erika): could be debug assert
+                        debug_assert!(ttkn.gtid() == gtid);
                         let correct_replica = self.select_replica(ttkn);
                         correct_replica.thread_routing.set_bit(gtid);
                     }
@@ -645,7 +645,7 @@ where
         cl: Option<CombinerLock<'a, D>>,
     ) -> Result<<D as Dispatch>::Response, ReplicaError<D>> {
         let r = self.select_replica(tkn);
-        assert!(r.thread_routing._test_bit(tkn.gtid())); // TODO(erika): could be debug assert
+        debug_assert!(r.thread_routing._test_bit(tkn.gtid()));
 
         //logging::info!("try_execute_mut selected replica {} from tkn {:?}", rid, tkn);
         let contexts = self.context_iterator(r);
@@ -784,7 +784,7 @@ where
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
         let r = self.select_replica(tkn);
-        assert!(r.thread_routing._test_bit(tkn.gtid())); // TODO(erika): could be debug assert
+        debug_assert!(r.thread_routing._test_bit(tkn.gtid()));
 
         let contexts = self.context_iterator(r);
 
@@ -1031,12 +1031,15 @@ impl<'a, D: Dispatch> core::iter::Iterator for ContextIterator<'a, D> {
     fn next(&mut self) -> Option<Self::Item> {
         let active_threads = self.active_threads.snapshot();
 
-        for i in 0..active_threads.len() {
-            if active_threads[i] > 0 {
-                let next_gtid = 128 * i + active_threads[i].trailing_zeros() as usize;
-                self.active_threads.clear_bit(next_gtid);
-                return Some(&self.contexts[next_gtid]);
-            }
+        if active_threads[0] > 0 {
+            let next_gtid = active_threads[0].trailing_zeros() as usize;
+            self.active_threads.clear_bit(next_gtid);
+            return Some(&self.contexts[next_gtid]);
+        }
+        if active_threads[1] > 0 {
+            let next_gtid = 128 + active_threads[1].trailing_zeros() as usize;
+            self.active_threads.clear_bit(next_gtid);
+            return Some(&self.contexts[next_gtid]);
         }
 
         None

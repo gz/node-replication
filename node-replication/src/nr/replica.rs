@@ -839,7 +839,6 @@ where
         contexts: ContextIterator<D>,
         combiner_lock: CombinerLock<'r, D>,
     ) -> Result<(), ReplicaError<D>> {
-        let num_registered_threads = contexts.clone().count();
         //logging::error!("combine() num_registered_threads={num_registered_threads}");
         let mut results = self.result.borrow_mut();
         let mut buffer = self.buffer.borrow_mut();
@@ -852,7 +851,7 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         let res = {
-            let mut data = self.data.write_n(num_registered_threads); // TODO(erika): bitmap.
+            let mut data = self.data.write(&contexts.active_threads);
             let f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 #[cfg(not(loom))]
                 let resp = data.dispatch_mut(o);
@@ -880,7 +879,7 @@ where
 
         // Execute outstanding operations on the shared log against this replica
         {
-            let mut data = self.data.write_n(num_registered_threads); // TODO(erika): bitmap.
+            let mut data = self.data.write(&contexts.active_threads);
             let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 let resp = data.dispatch_mut(o);
                 if mine {

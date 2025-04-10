@@ -154,7 +154,7 @@ where
     /// Required for garbage collection; since replicas make progress over the log
     /// independently, we want to make sure that we don't garbage collect operations
     /// that haven't been executed by all replicas.
-    pub(crate) ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS_PER_LOG], // TODO(erika) highest bit to indicate use?)
+    pub(crate) ltails: [CachePadded<AtomicUsize>; MAX_REPLICAS_PER_LOG],
 
     /// Identifier that will be allocated to the next replica that registers with
     /// this Log. Also required to correctly index into ltails above.

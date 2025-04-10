@@ -170,10 +170,9 @@ where
         // We use the bitmap to determine which readers to check.
         loop {
             let mut done = 0;
-            for i in 0..snapshot.len() {
-                if snapshot[i] > 0 {
-                    let next_gtid = 128 * i + snapshot[i].trailing_zeros() as usize;
-                    done += self.rlock[next_gtid].load(Ordering::Relaxed);
+            for i in 0..MAX_THREADS_PER_INSTANCE {
+                if snapshot[i / 128] >> (i % 128) & 0x1 != 0 {
+                    done += self.rlock[i].load(Ordering::Relaxed);
                 }
             }
             if done == 0 {

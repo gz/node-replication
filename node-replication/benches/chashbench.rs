@@ -4,6 +4,7 @@
 
 //! Integration of the rust-evmap benchmarks (https://github.com/jonhoo/rust-evmap/)
 //! for various hash-maps; added a node-replicated and urcu hash-table for comparison.
+#![allow(deprecated)]
 
 use std::sync;
 use std::sync::atomic::{AtomicUsize, Ordering};

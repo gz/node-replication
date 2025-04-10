@@ -105,7 +105,6 @@ impl AtomicBitmap {
 #[cfg(test)]
 mod test {
     use super::*;
-    use core::convert::TryInto;
 
     #[test]
     pub fn test_set_correct_bit() {

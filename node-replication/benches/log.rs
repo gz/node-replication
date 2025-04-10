@@ -14,7 +14,6 @@ use nr2::nr::replica::Replica;
 use nr2::nr::{Dispatch, NodeReplicated};
 use rand::distributions::Distribution;
 use rand::{Rng, RngCore};
-use zipf::ZipfDistribution;
 
 #[derive(Debug, Default, Eq, PartialEq, Copy, Clone)]
 pub struct Nop(usize);

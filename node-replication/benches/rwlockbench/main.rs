@@ -130,7 +130,7 @@ fn run_rwlock(
 
     while time::Instant::now() < end {
         if write {
-            let mut ele = lock.write(readers);
+            let mut ele = lock.write_n(readers);
             *ele = t_rng.next_u64() as usize;
         } else {
             let ele = lock.read(tid);

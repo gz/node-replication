@@ -913,7 +913,6 @@ where
         }
     }
 
-    /*
     /// Executes a mutable operation asynchronously on a replica, and returns
     /// the response in `resp`
     ///
@@ -945,7 +944,6 @@ where
     ) {
         resp.set(async move { self.execute(op, tkn) });
     }
-    */
 
     #[inline(always)]
     fn select_replica(&self, tkn: ThreadToken) -> &Replica<D> {
@@ -987,7 +985,7 @@ where
         self.replicas.get(&rid).unwrap()
     }
 
-    pub(crate) fn context_iterator(&self, replica: &Replica<D>) -> ContextIterator<D> {
+    pub fn context_iterator(&self, replica: &Replica<D>) -> ContextIterator<D> {
         ContextIterator {
             contexts: &self.contexts,
             active_threads: replica.thread_routing.clone(),
@@ -1045,18 +1043,15 @@ where
         r.try_combine(&self.log, contexts)
     }
 
-    /*
     #[doc(hidden)]
     pub fn sync(&self, tkn: ThreadToken) {
-        // TODO(erika): select replica without affinity change?
         let r = self.select_replica(tkn);
         r.sync(&self.log)
     }
-    */
 }
 
 #[derive(Clone)]
-pub(crate) struct ContextIterator<'a, D: Dispatch> {
+pub struct ContextIterator<'a, D: Dispatch> {
     contexts: &'a Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
     active_threads: AtomicBitmap,
 }

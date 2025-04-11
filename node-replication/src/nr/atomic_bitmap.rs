@@ -4,15 +4,6 @@ pub struct AtomicBitmap {
     data: [AtomicU64; 4],
 }
 
-pub const DEFAULT_BITMAP: AtomicBitmap = AtomicBitmap {
-    data: [
-        AtomicU64::new(0),
-        AtomicU64::new(0),
-        AtomicU64::new(0),
-        AtomicU64::new(0),
-    ],
-};
-
 impl Default for AtomicBitmap {
     fn default() -> Self {
         Self {
@@ -81,18 +72,6 @@ impl AtomicBitmap {
         let bit = bit_pos % 64;
         (self.data[idx].load(Ordering::SeqCst) & (1 << bit)) != 0
     }
-
-    /*
-    #[inline(always)]
-    pub fn count_ones(&self) -> usize {
-        let values = self.snapshot();
-        let mut ones = 0;
-        for i in 0..values.len() {
-            ones += values[i].count_ones();
-        }
-        ones as usize
-    }
-    */
 }
 
 #[cfg(test)]

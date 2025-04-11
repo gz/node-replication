@@ -244,8 +244,8 @@ where
         let raw = v.into_boxed_slice();
 
         let fls: [CachePadded<Cell<bool>>; MAX_REPLICAS_PER_LOG] = arr![Default::default(); 5];
-        for idx in 0..MAX_REPLICAS_PER_LOG {
-            fls[idx].set(true)
+        for i in fls.iter().take(MAX_REPLICAS_PER_LOG) {
+            i.set(true)
         }
 
         #[cfg(not(loom))]
@@ -597,11 +597,10 @@ where
     ///
     /// # Example
     ///
-    /// Can't execute this until we have access to `pub(crate)` in tests.
     ///
-    /// ```ignore
+    /// ```
     /// use nr2::nr::Log;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
     /// enum Operation {
@@ -651,13 +650,13 @@ where
     /// assert_eq!(true, l.is_replica_synced_for_reads(&idx1, l.get_ctail()));
     /// ```
     #[inline(always)]
-    pub(crate) fn is_replica_synced_for_reads(&self, idx: &LogToken, ctail: usize) -> bool {
+    pub fn is_replica_synced_for_reads(&self, idx: &LogToken, ctail: usize) -> bool {
         self.ltails[idx.0 - 1].load(Ordering::Relaxed) >= ctail
     }
 
     /// This method returns the current ctail value for the log.
     #[inline(always)]
-    pub(crate) fn get_ctail(&self) -> usize {
+    pub fn get_ctail(&self) -> usize {
         self.ctail.load(Ordering::Relaxed)
     }
 }

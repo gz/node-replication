@@ -65,7 +65,7 @@ where
 ///
 /// - `M` is the type of meta-data that is associated with each operation.
 #[repr(align(64))]
-pub(crate) struct Context<T, R, M>
+pub struct Context<T, R, M>
 where
     T: Sized + Clone,
     R: Sized + Clone,
@@ -256,7 +256,7 @@ where
 /// and tail changes. Worst case will just panic due to unwrap on a None or give
 /// incorrect results, but needs some thought: If worse things are possible, we
 /// should instead make [`Context::iter`] unsafe.
-pub(crate) struct ContextIterator<'s, T, R, M>
+pub struct ContextIterator<'s, T, R, M>
 where
     T: Sized + Clone,
     R: Sized + Clone,

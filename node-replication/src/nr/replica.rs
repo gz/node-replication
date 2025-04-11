@@ -18,7 +18,7 @@ use crossbeam_utils::CachePadded;
 #[cfg(loom)]
 use loom::sync::atomic::{AtomicUsize, Ordering};
 
-use super::atomic_bitmap::{AtomicBitmap, DEFAULT_BITMAP};
+use super::atomic_bitmap::AtomicBitmap;
 use super::context::Context;
 use super::log::{Log, LogToken};
 use super::rwlock::RwLock;
@@ -336,7 +336,7 @@ where
                     ),
                 ),
             data: CachePadded::new(RwLock::<D>::new(d)),
-            thread_routing: DEFAULT_BITMAP,
+            thread_routing: AtomicBitmap::default(),
         }
     }
 

@@ -197,11 +197,9 @@ where
     ///
     /// # Example
     ///
-    /// (Example ignored for lack of access to `exec` in doctests.)
-    ///
-    /// ```ignore
+    /// ```
     /// use nr2::nr::Log;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
     /// enum Operation {
@@ -234,7 +232,7 @@ where
     /// l.exec(&idx, &mut g);
     /// ```
     #[inline(always)]
-    pub(crate) fn exec<F: FnMut(T, bool)>(&self, idx: &LogToken, d: &mut F) {
+    pub fn exec<F: FnMut(T, bool)>(&self, idx: &LogToken, d: &mut F) {
         // Load the logical log offset from which we must execute operations.
         let ltail = self.ltails[idx.0 - 1].load(Ordering::Relaxed);
 

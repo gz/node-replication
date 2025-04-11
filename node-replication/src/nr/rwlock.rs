@@ -163,7 +163,6 @@ where
                 Err(_) => continue,
             }
         }
-        let snapshot = write_bitmap.snapshot();
 
         // Next, wait until all readers have released their locks. This condition
         // evaluates to true if each reader lock is free (i.e equal to zero).
@@ -171,7 +170,7 @@ where
         loop {
             let mut done = 0;
             for i in 0..MAX_THREADS_PER_INSTANCE {
-                if snapshot[i / 128] >> (i % 128) & 0x1 != 0 {
+                if write_bitmap._test_bit(i) {
                     done += self.rlock[i].load(Ordering::Relaxed);
                 }
             }

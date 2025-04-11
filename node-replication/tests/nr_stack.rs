@@ -7,11 +7,11 @@ extern crate rand;
 extern crate std;
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Barrier};
 use std::thread;
-use std::usize;
 
-use nr2::nr::AffinityManager;
+use nr2::nr::{AffinityManager, NodeReplicated};
 use nr2::nr::{Dispatch, Log, Replica};
 
 use rand::{thread_rng, Rng};
@@ -41,7 +41,6 @@ fn compare_vectors<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
     matching == a.len() && matching == b.len()
 }
 
-/*
 impl Stack {
     pub fn push(&mut self, data: u32) {
         self.storage.push(data);
@@ -98,24 +97,21 @@ impl Dispatch for Stack {
 /// against a known correct implementation.
 #[test]
 fn sequential_test() {
-    let log = Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
-        4 * 1024 * 1024,
-        (),
-        AffinityManager::default(),
-    );
+    let replicas = NonZeroUsize::new(1).unwrap();
+    let nrstack = NodeReplicated::<Stack>::new(replicas, |_ac| 0).expect("Can't create Ds");
 
     let mut orng = thread_rng();
     let nop = 50;
 
-    let ltkn = log.register().expect("Can't register with log");
-    let r = Replica::<Stack>::new(ltkn);
-    let idx = r.register().expect("Failed to register with Replica.");
+    let idx = nrstack
+        .register(0)
+        .expect("Failed to register with nrstack replica");
     let mut correct_stack: Vec<u32> = Vec::new();
 
     // Populate with some initial data
     for _i in 0..50 {
         let element = orng.gen();
-        r.execute_mut(&log, OpWr::Push(element), idx).unwrap();
+        nrstack.execute_mut(OpWr::Push(element), idx).unwrap();
         correct_stack.push(element);
     }
 
@@ -123,24 +119,24 @@ fn sequential_test() {
         let op: usize = orng.gen();
         match op % 3usize {
             0usize => {
-                let o = r.execute_mut(&log, OpWr::Pop, idx).unwrap();
+                let o = nrstack.execute_mut(OpWr::Pop, idx).unwrap();
                 let popped = correct_stack.pop().unwrap();
-                assert_eq!(popped, o.unwrap());
+                assert_eq!(popped, o);
             }
             1usize => {
                 let element = orng.gen();
-                let pushed = r.execute_mut(&log, OpWr::Push(element), idx).unwrap();
+                let pushed = nrstack.execute_mut(OpWr::Push(element), idx).unwrap();
                 correct_stack.push(element);
-                assert_eq!(pushed, Some(element));
+                assert_eq!(pushed, element);
             }
             2usize => {
-                let o = r.execute(&log, OpRd::Peek, idx).unwrap();
+                let o = nrstack.execute(OpRd::Peek, idx).unwrap();
                 let mut ele = None;
                 let len = correct_stack.len();
                 if len > 0 {
                     ele = Some(correct_stack[len - 1]);
                 }
-                assert_eq!(ele, o);
+                assert_eq!(ele, Some(o));
             }
             _ => unreachable!(),
         }
@@ -152,9 +148,11 @@ fn sequential_test() {
             "Push operation error detected"
         );
     };
-    r.verify(&log, v);
+    let replica = &nrstack.replicas[&0];
+    replica.verify(&nrstack.log, v);
 }
 
+/*
 /// A stack to verify that the log works correctly with multiple threads.
 #[derive(Eq, PartialEq, Clone)]
 struct VerifyStack {

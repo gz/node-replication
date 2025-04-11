@@ -478,7 +478,6 @@ where
     /// let thrtkn = replica.register().expect("Failed to register with replica.");
     ///
     /// // execute_mut() can be used to write to the replicated data structure.
-    /// // TODO(hunhoffe): need to update below lines
     /// // let res = replica.execute_mut(&log, 100, thrtkn);
     /// // assert_eq!(None, res.unwrap());
     /// ```
@@ -569,7 +568,6 @@ where
     /// let logtkn = log.register().unwrap();
     /// let replica = Replica::<Data>::new(logtkn);
     /// let thrtkn = replica.register().expect("Failed to register with replica.");
-    /// // TODO(hunhoffe): fix below document code
     /// // let _wr = replica.execute_mut(&log, 100, thrtkn);
     ///
     /// // execute() can be used to read from the replicated data structure.
@@ -681,7 +679,6 @@ where
     /// # Note
     /// There is no need for a regular client to ever call this function. Only use for
     /// testing.
-    #[doc(hidden)]
     pub fn verify<F: FnMut(&D)>(&self, slog: &Log<<D as Dispatch>::WriteOperation>, mut v: F) {
         // Acquire the combiner lock before attempting anything on the data structure.
         // Use an idx greater than the maximum that can be allocated.

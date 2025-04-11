@@ -333,7 +333,7 @@ impl From<alloc::collections::TryReserveError> for NodeReplicatedError {
 /// replica and handles liveness of replicas by making sure to advance replicas
 /// which are behind automatically.
 pub struct NodeReplicated<D: Dispatch + Sync + Clone> {
-    log: Log<D::WriteOperation>,
+    pub log: Log<D::WriteOperation>,
     pub replicas: BTreeMap<usize, Replica<D>>,
     pub replica_list: ArrayVec<usize, MAX_REPLICAS_PER_LOG>,
 

@@ -7,6 +7,7 @@ use crossbeam_skiplist::SkipSet;
 use std::sync::Arc;
 
 use nr2::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica};
+use nr2::nr::AffinityManager;
 
 #[derive(Default)]
 struct CnrBtreeSet {
@@ -75,6 +76,7 @@ fn main() {
         Log::<<CnrBtreeSet as Dispatch>::WriteOperation>::new_with_bytes(
             2 * 1024 * 1024,
             LogMetaData::new(1),
+            AffinityManager::default(),
         ),
     );
 

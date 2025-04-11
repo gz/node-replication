@@ -6,6 +6,7 @@ use crossbeam_queue::SegQueue;
 use std::sync::Arc;
 
 use nr2::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica};
+use nr2::nr::AffinityManager;
 
 /// We support mutable push and pop operations on the stack.
 #[derive(Clone, Debug, PartialEq)]
@@ -101,6 +102,7 @@ fn main() {
     let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
         2 * 1024 * 1024,
         LogMetaData::new(1),
+        AffinityManager::default(),
     ));
 
     // Next, we create two replicas of the stack

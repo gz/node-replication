@@ -6,6 +6,7 @@ use chashmap::CHashMap as HashMap;
 use std::sync::Arc;
 
 use nr2::cnr::{Dispatch, Log, LogMapper, LogMetaData, Replica};
+use nr2::nr::AffinityManager;
 
 /// The node-replicated hashmap uses a std hashmap internally.
 #[derive(Default)]
@@ -68,6 +69,7 @@ fn main() {
         Log::<<NrHashMap as Dispatch>::WriteOperation>::new_with_bytes(
             2 * 1024 * 1024,
             LogMetaData::new(1),
+            AffinityManager::default(),
         ),
     );
 

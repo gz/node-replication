@@ -240,7 +240,8 @@ type AffinityChangeFn = dyn Fn(AffinityChange) -> usize + Send + Sync;
 ///
 /// The tokens take care of calling the `af_change_fn` that's usually provided
 /// by a user.
-struct AffinityManager {
+
+pub struct AffinityManager {
     af_change_fn: Box<AffinityChangeFn>,
 }
 
@@ -251,7 +252,7 @@ impl AffinityManager {
     /// - `af_change_fn`: User provided function, or can be some default for
     /// e.g., Linux that relies on migrating threads a NUMA aware mallocs and
     /// the first-touch policy.
-    fn new(af_change_fn: Box<AffinityChangeFn>) -> Self {
+    pub fn new(af_change_fn: Box<AffinityChangeFn>) -> Self {
         Self { af_change_fn }
     }
 
@@ -262,6 +263,15 @@ impl AffinityManager {
     /// change.
     fn switch(&self, rid: ReplicaId) -> AffinityToken<'_> {
         AffinityToken::new(&self.af_change_fn, rid)
+    }
+}
+
+impl Default for AffinityManager {
+    fn default() -> Self {
+        AffinityManager::new(Box::new(|affinity_tkn| match affinity_tkn {
+            AffinityChange::Replica(n) => n,
+            AffinityChange::Revert(n) => n,
+        }))
     }
 }
 
@@ -402,7 +412,7 @@ where
     /// ```
     pub fn new(
         num_replicas: NonZeroUsize,
-        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
+        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + Clone + 'static,
     ) -> Result<Self, NodeReplicatedError> {
         Self::with_log_size(num_replicas, chg_mem_affinity, log::DEFAULT_LOG_BYTES)
     }
@@ -411,12 +421,14 @@ where
     /// (provided in bytes) for the [`Log`].
     pub fn with_log_size(
         num_replicas: NonZeroUsize,
-        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
+        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + Clone + 'static,
         log_size: usize,
     ) -> Result<Self, NodeReplicatedError> {
         assert!(num_replicas.get() <= MAX_REPLICAS_PER_LOG);
-        let affinity_mngr = AffinityManager::new(Box::try_new(chg_mem_affinity)?);
-        let log = Log::new_with_bytes(log_size, ());
+        let mem_fn = Box::try_new(chg_mem_affinity)?;
+        let affinity_mngr = AffinityManager::new(mem_fn.clone());
+        let log = Log::new_with_bytes(log_size, (), affinity_mngr);
+        let affinity_mngr = AffinityManager::new(mem_fn);
 
         let mut contexts = Vec::with_capacity(MAX_REPLICAS_PER_LOG * MAX_THREADS_PER_REPLICA);
         for _idx in 0..(MAX_REPLICAS_PER_LOG * MAX_THREADS_PER_REPLICA) {
@@ -659,12 +671,6 @@ where
         let contexts = self.context_iterator(r);
 
         if let Some(combiner_lock) = cl {
-            let _aftkn = if tkn.rid != r.replica_id() {
-                Some(self.affinity_mngr.switch(tkn.rid))
-            } else {
-                None
-            };
-
             // We expect to have already enqueued the op (it's a re-try since have the combiner lock),
             // so technically its not needed to supply it again (but we currently do it anyways...)
             r.execute_mut_locked(&self.log, contexts, combiner_lock)?;
@@ -763,7 +769,6 @@ where
                         {
                             assert_ne!(stuck_ridx, tkn.rid);
                             if let Some(r) = self.replicas.get(&stuck_ridx) {
-                                let _aftkn = self.affinity_mngr.switch(stuck_ridx);
                                 r.sync(&self.log)
                             } else {
                                 panic!("Replica not found??");
@@ -783,7 +788,6 @@ where
                     debug_assert_ne!(ridx, tkn.rid);
                     //warn!("execute_mut ResolveOp::Sync {}", ridx);
                     if let Some(r) = self.replicas.get(&ridx) {
-                        let _aftkn = self.affinity_mngr.switch(ridx);
                         r.try_sync(&self.log)
                     } else {
                         panic!("Replica not found??");
@@ -805,11 +809,6 @@ where
         debug_assert!(r.thread_routing._test_bit(tkn.gtid()));
         let contexts = self.context_iterator(r);
         if let Some(combiner_lock) = cl {
-            let _aftkn = if tkn.rid != r.replica_id() {
-                Some(self.affinity_mngr.switch(tkn.rid))
-            } else {
-                None
-            };
             r.execute_locked(&self.log, op, tkn, contexts, combiner_lock)
         } else {
             r.execute(&self.log, op, contexts, tkn)
@@ -903,7 +902,6 @@ where
                 ResolveOp::Sync(ridx) => {
                     // Holds trivially because of all the other asserts in this function
                     debug_assert_ne!(ridx, tkn.rid);
-                    let _aftkn = self.affinity_mngr.switch(ridx);
                     if let Some(r) = self.replicas.get(&ridx) {
                         r.try_sync(&self.log)
                     } else {

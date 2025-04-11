@@ -493,7 +493,7 @@ where
     /// use nr2::cnr::Log;
     /// use nr2::cnr::LogMetaData;
     /// use core::sync::atomic::AtomicBool;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
     /// enum Operation {
@@ -503,7 +503,7 @@ where
     /// }
     ///
     /// // Creates a 1 Mega Byte sized log.
-    /// let mut l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, LogMetaData::new(1));
+    /// let mut l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, LogMetaData::new(1), AffinityManager::default());
     ///
     /// // TODO(hunhoffe): fix this documentation code
     /// // Update the callback function for the log.
@@ -527,6 +527,7 @@ mod tests {
 
     use super::*;
     use crate::log::{Entry, LogToken};
+    use crate::nr::AffinityManager;
     use std::sync::Arc;
 
     // Define operations along with their arguments that go onto the log.
@@ -563,7 +564,11 @@ mod tests {
     // Tests if a small log can be correctly constructed.
     #[test]
     fn test_log_create() {
-        let l = Log::<Operation>::new_with_bytes(1024 * 1024, LogMetaData::new(1));
+        let l = Log::<Operation>::new_with_bytes(
+            1024 * 1024,
+            LogMetaData::new(1),
+            AffinityManager::default(),
+        );
         let n = (1024 * 1024) / Log::<Operation>::entry_size();
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
@@ -582,7 +587,8 @@ mod tests {
     // Test that we can correctly append an entry into the log.
     #[test]
     fn test_log_append() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
         let o = [(Operation::Read, 1, false)];
         l.append(&o, &tkn, |_o: Operation, _i: usize, _, _, _, _| -> bool {
@@ -599,7 +605,8 @@ mod tests {
     // Test that multiple entries can be appended to the log.
     #[test]
     fn test_log_append_multiple() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
         let o = [
             (Operation::Read, 1, false),
@@ -616,7 +623,8 @@ mod tests {
     // Tests that we can advance the head of the log to the smallest of all replica-local tails.
     #[test]
     fn test_log_advance_head() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
 
         for i in 2..4 {
@@ -641,7 +649,8 @@ mod tests {
     // Tests that the head of the log is advanced when we're close to filling up the entire log.
     #[test]
     fn test_log_append_gc() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
 
         let o: [(Operation, usize, bool); 4] = unsafe {
@@ -671,7 +680,8 @@ mod tests {
     // the same because entries have not been executed yet.
     #[test]
     fn test_log_append_wrap() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
 
         let o: [(Operation, usize, bool); 1024] = unsafe {
@@ -704,7 +714,8 @@ mod tests {
     // Test that we can execute operations appended to the log.
     #[test]
     fn test_log_exec() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
 
         let o = [(Operation::Read, 1, false)];
@@ -732,7 +743,8 @@ mod tests {
     // Test that exec() doesn't do anything when the log is empty.
     #[test]
     fn test_log_exec_empty() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
 
         let mut f = |_o: Operation, _i: usize, _, _, _, _| -> bool {
@@ -746,7 +758,8 @@ mod tests {
     // Test that exec() doesn't do anything if we're already up-to-date.
     #[test]
     fn test_log_exec_zero() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
 
         let o = [(Operation::Read, 1, false)];
@@ -770,7 +783,8 @@ mod tests {
     // Test that multiple entries on the log can be executed correctly.
     #[test]
     fn test_log_exec_multiple() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
 
         let o = [
@@ -807,7 +821,8 @@ mod tests {
     // a wrapped around log.
     #[test]
     fn test_log_exec_wrap() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
 
         let o: [(Operation, usize, bool); 1024] = unsafe {
@@ -844,7 +859,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_exec_panic() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
         let tkn = l.register().unwrap();
 
         let o: [(Operation, usize, bool); 1024] = unsafe {
@@ -872,7 +888,10 @@ mod tests {
     // they are correctly dropped once overwritten.
     #[test]
     fn test_log_change_refcount() {
-        let l = Log::<Arc<Operation>>::new_with_metadata(LogMetaData::new(1));
+        let l = Log::<Arc<Operation>>::new_with_metadata(
+            LogMetaData::new(1),
+            AffinityManager::default(),
+        );
         let o1 = [(Arc::new(Operation::Read), 1, false)];
         let o2 = [(Arc::new(Operation::Read), 1, false)];
         assert_eq!(Arc::strong_count(&o1[0].0), 1);
@@ -922,7 +941,11 @@ mod tests {
 
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let _size: usize = total_entries * entry_size;
-        let l = Log::<Arc<Operation>>::new_with_entries(16384, LogMetaData::new(1));
+        let l = Log::<Arc<Operation>>::new_with_entries(
+            16384,
+            LogMetaData::new(1),
+            AffinityManager::default(),
+        );
         assert_eq!(l.slog.len(), total_entries);
 
         // Intentionally not using `register()`, (will fail the test due to GC).
@@ -963,7 +986,8 @@ mod tests {
     // false when a replica is not synced up and true when it is.
     #[test]
     fn test_replica_synced_for_read() {
-        let l = Log::<Operation>::new_with_metadata(LogMetaData::new(1));
+        let l =
+            Log::<Operation>::new_with_metadata(LogMetaData::new(1), AffinityManager::default());
 
         let one = l.register().unwrap();
         let two = l.register().unwrap();

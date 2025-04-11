@@ -12,6 +12,7 @@ use nr2::cnr::Log;
 use nr2::cnr::LogMapper;
 use nr2::cnr::LogMetaData;
 use nr2::cnr::Replica;
+use nr2::nr::AffinityManager;
 
 /// Maximum size of the hashmap.
 const CAPACITY: usize = 100_000;
@@ -135,6 +136,7 @@ fn sequential_test_mut_order() {
             Log::<<CNRHashmap as Dispatch>::WriteOperation>::new_with_bytes(
                 4 * 1024 * 1024,
                 LogMetaData::new(i + 1),
+                AffinityManager::default(),
             ),
         );
         logs.push(log.clone());
@@ -170,6 +172,7 @@ fn parallel_test_mut_order() {
             Log::<<CNRHashmap as Dispatch>::WriteOperation>::new_with_bytes(
                 4 * 1024 * 1024,
                 LogMetaData::new(i + 1),
+                AffinityManager::default(),
             ),
         );
         logs.push(log.clone());
@@ -236,6 +239,7 @@ fn sequential_test_scan_order() {
             Log::<<CNRHashmap as Dispatch>::WriteOperation>::new_with_bytes(
                 4 * 1024 * 1024,
                 LogMetaData::new(i + 1),
+                AffinityManager::default(),
             ),
         );
         logs.push(log.clone());
@@ -271,6 +275,7 @@ fn parallel_test_scan_order() {
             Log::<<CNRHashmap as Dispatch>::WriteOperation>::new_with_bytes(
                 4 * 1024 * 1024,
                 LogMetaData::new(i + 1),
+                AffinityManager::default(),
             ),
         );
         logs.push(log.clone());
@@ -337,6 +342,7 @@ fn sequential_test_mut2scan_order() {
             Log::<<CNRHashmap as Dispatch>::WriteOperation>::new_with_bytes(
                 4 * 1024 * 1024,
                 LogMetaData::new(i + 1),
+                AffinityManager::default(),
             ),
         );
         logs.push(log.clone());
@@ -376,6 +382,7 @@ fn parallel_test_mut2scan_order() {
             Log::<<CNRHashmap as Dispatch>::WriteOperation>::new_with_bytes(
                 5 * 1024 * 1024,
                 LogMetaData::new(i + 1),
+                AffinityManager::default(),
             ),
         );
         logs.push(log.clone());

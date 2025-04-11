@@ -26,7 +26,7 @@ where
     ///
     /// ```
     /// use nr2::log::Log;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
     /// enum Operation {
@@ -34,7 +34,7 @@ where
     ///     Write(u64),
     /// }
     ///
-    /// let l = Log::<Operation, (), ()>::new_with_bytes(1 * 1024 * 1024, ());
+    /// let l = Log::<Operation, (), ()>::new_with_bytes(1 * 1024 * 1024, (), AffinityManager::default());
     /// let idx = l.register().expect("Failed to register with the Log.");
     ///
     /// // The set of operations we would like to append. The order will
@@ -209,7 +209,7 @@ where
     ///     Write(u64),
     /// }
     ///
-    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, ());
+    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, (), AffinityManager::default());
     /// let idx = l.register().expect("Failed to register with the Log.");
     /// let ops = [Operation::Write(100), Operation::Read];
     ///
@@ -252,6 +252,10 @@ where
             panic!("Local tail not within the shared log!")
         };
 
+        // TODO(erika): Change affinity here??
+        // replica id is: self.log_tkn.0 - 1
+        let _aff_tkn = self.affinity_mngr.switch(idx.0 - 1);
+
         // Execute all operations from the passed in offset to the shared log's tail.
         // Check if the entry is live first; we could have a replica that has reserved
         // entries, but not filled them into the log yet.
@@ -293,6 +297,8 @@ where
         // this replica's local tail.
         self.ctail.fetch_max(gtail, Ordering::Relaxed);
         self.ltails[idx.0 - 1].store(gtail, Ordering::Relaxed);
+
+        // drop affinity here
     }
 
     /// Advances the head of the log forward. If a replica has stopped making
@@ -346,6 +352,7 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use crate::nr::AffinityManager;
     use std::sync::Arc;
 
     // Define operations along with their arguments that go onto the log.
@@ -661,7 +668,7 @@ mod tests {
 
         assert_eq!(Log::<Arc<Operation>>::entry_size(), entry_size);
         let size: usize = total_entries * entry_size;
-        let l = Log::<Arc<Operation>>::new_with_bytes(size, ());
+        let l = Log::<Arc<Operation>>::new_with_bytes(size, (), AffinityManager::default());
         let lt = l.register().unwrap();
         let o1 = [Arc::new(Operation::Read)];
         let o2 = [Arc::new(Operation::Read)];

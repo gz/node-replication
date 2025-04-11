@@ -482,7 +482,7 @@ where
     /// // let res = replica.execute_mut(&log, 100, thrtkn);
     /// // assert_eq!(None, res.unwrap());
     /// ```
-    pub(crate) fn execute_mut(
+    pub fn execute_mut(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
@@ -580,7 +580,7 @@ where
     /// # Implementation details
     /// Issues a read-only operation against the replica and returns a response.
     /// Makes sure the replica is synced up against the log before doing so.
-    pub(crate) fn execute<'rop>(
+    pub fn execute<'rop>(
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         op: <D as Dispatch>::ReadOperation<'rop>,
@@ -911,6 +911,7 @@ where
 pub(crate) mod test {
     extern crate std;
     use super::*;
+    use crate::nr::AffinityManager;
 
     // Really dumb data structure to test against the Replica and shared log.
     #[derive(Default, Clone)]
@@ -936,7 +937,11 @@ pub(crate) mod test {
     // Tests whether we can construct a Replica given a log.
     #[test]
     fn test_replica_create() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
+        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+            (),
+            AffinityManager::default(),
+        );
         let lt = slog.register().unwrap();
         let repl = Replica::<Data>::new(lt);
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
@@ -957,7 +962,11 @@ pub(crate) mod test {
     // Tests whether we can register with this replica and receive an idx.
     #[test]
     fn test_replica_register() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
+        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+            (),
+            AffinityManager::default(),
+        );
         let lt = slog.register().unwrap();
         let repl = Replica::<Data>::new(lt);
         assert_eq!(repl.register(), Some(ThreadToken::new(0, ReplicaToken(0))));
@@ -970,7 +979,11 @@ pub(crate) mod test {
     // Tests whether registering more than the maximum limit of threads per replica is disallowed.
     #[test]
     fn test_replica_register_none() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
+        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
+            1024,
+            (),
+            AffinityManager::default(),
+        );
         let lt = slog.register().unwrap();
         let repl = Replica::<Data>::new(lt);
         repl.next

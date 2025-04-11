@@ -33,6 +33,7 @@ use tokio::runtime::Runtime;
 use nr2::cnr::{Dispatch, Log, LogMetaData, Replica, ReplicaToken, MAX_REPLICAS_PER_LOG};
 #[cfg(feature = "async")]
 use nr2::nr::reusable_box::ReusableBoxFuture;
+use nr2::nr::AffinityManager;
 
 use crate::benchmark::*;
 pub use crate::topology::ThreadMapping;
@@ -258,6 +259,7 @@ pub(crate) fn baseline_comparison<R: ReplicaTrait>(
     let log = Arc::new(Log::<<R::D as Dispatch>::WriteOperation>::new_with_bytes(
         log_size,
         LogMetaData::default(),
+        AffinityManager::default(),
     ));
     let r = Replica::<R::D>::new(vec![log]);
     let ridx = r.register_me().expect("Failed to register with Replica.");
@@ -1241,6 +1243,7 @@ where
                                         Log::<<R::D as Dispatch>::WriteOperation>::new_with_bytes(
                                             self.log_size,
                                             LogMetaData::default(),
+                                            AffinityManager::default(),
                                         ),
                                     ));
                                 }

@@ -5,6 +5,7 @@ use nr2::cnr::Log;
 use nr2::cnr::LogMapper;
 use nr2::cnr::LogMetaData;
 use nr2::cnr::Replica;
+use nr2::nr::AffinityManager;
 
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -87,6 +88,7 @@ fn setup(nlogs: usize, nreplicas: usize, nops: usize, nthreads: usize) {
             Log::<<CNRHashmap as Dispatch>::WriteOperation>::new_with_bytes(
                 4 * 1024 * 1024,
                 LogMetaData::new(i + 1),
+                AffinityManager::default(),
             ),
         );
         logs.push(log.clone());

@@ -7,13 +7,14 @@ extern crate rand;
 extern crate std;
 
 use std::collections::HashMap;
-//use std::sync::{Arc, Barrier};
-//use std::thread;
-//use std::usize;
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::usize;
 
-use nr2::nr::Dispatch; //, Log, Replica};
+use nr2::nr::AffinityManager;
+use nr2::nr::{Dispatch, Log, Replica};
 
-// use rand::{thread_rng, Rng};
+use rand::{thread_rng, Rng};
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 enum OpWr {
@@ -40,6 +41,7 @@ fn compare_vectors<T: PartialEq>(a: &Vec<T>, b: &Vec<T>) -> bool {
     matching == a.len() && matching == b.len()
 }
 
+/*
 impl Stack {
     pub fn push(&mut self, data: u32) {
         self.storage.push(data);
@@ -96,8 +98,11 @@ impl Dispatch for Stack {
 /// against a known correct implementation.
 #[test]
 fn sequential_test() {
-    /*
-    let log = Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(4 * 1024 * 1024, ());
+    let log = Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
+        4 * 1024 * 1024,
+        (),
+        AffinityManager::default(),
+    );
 
     let mut orng = thread_rng();
     let nop = 50;
@@ -148,7 +153,6 @@ fn sequential_test() {
         );
     };
     r.verify(&log, v);
-    */
 }
 
 /// A stack to verify that the log works correctly with multiple threads.
@@ -264,7 +268,6 @@ impl Dispatch for VerifyStack {
 // Then, a single thread pops all elements and checks that they are popped in the right order.
 #[test]
 fn parallel_push_sequential_pop_test() {
-    /*
     let t = 4usize;
     let r = 2usize;
     let l = 32usize;
@@ -273,6 +276,7 @@ fn parallel_push_sequential_pop_test() {
     let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
         l * 1024 * 1024,
         (),
+        AffinityManager::default(),
     ));
 
     let mut replicas = Vec::with_capacity(r);
@@ -327,7 +331,6 @@ fn parallel_push_sequential_pop_test() {
             }
         }
     }
-    */
 }
 
 /// Many threads run in parallel, each pushing a unique increasing element into the stack.
@@ -335,7 +338,6 @@ fn parallel_push_sequential_pop_test() {
 /// elements that came from a given thread are monotonically decreasing.
 #[test]
 fn parallel_push_and_pop_test() {
-    /*
     let t = 4usize;
     let r = 2usize;
     let l = 128usize;
@@ -344,6 +346,7 @@ fn parallel_push_and_pop_test() {
     let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
         l * 1024 * 1024,
         (),
+        AffinityManager::default(),
     ));
 
     let mut replicas = Vec::with_capacity(r);
@@ -393,10 +396,8 @@ fn parallel_push_and_pop_test() {
             .join()
             .expect("Thread didn't finish successfully.");
     }
-    */
 }
 
-/*
 fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64) {
     let idx = r.register().expect("Failed to register with Replica.");
 
@@ -425,9 +426,7 @@ fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barri
 
     (0, 0)
 }
-*/
 
-/*
 /// Verify that 2 replicas are equal after a set of random
 /// operations have been executed against the log.
 #[test]
@@ -440,6 +439,7 @@ fn replicas_are_equal() {
     let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
         l * 1024 * 1024,
         (),
+        AffinityManager::default(),
     ));
 
     let mut replicas = Vec::with_capacity(r);

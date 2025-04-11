@@ -63,7 +63,7 @@ TODO (if still noticable or often)
 */
 
 #[inline(always)]
-fn chg_affinity(af: AffinityChange) -> usize {
+pub fn chg_affinity(af: AffinityChange) -> usize {
     match af {
         AffinityChange::Replica(rid) => {
             let maybe_node = MY_HOME_NODE.get();

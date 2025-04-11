@@ -20,7 +20,7 @@ pub use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use static_assertions::const_assert;
 
 use crate::context::MAX_PENDING_OPS;
-use crate::nr::NodeReplicatedError;
+use crate::nr::{AffinityManager, NodeReplicatedError};
 use crate::replica::MAX_THREADS_PER_REPLICA;
 
 /// A token that identifies a replica for a log.
@@ -167,6 +167,9 @@ where
 
     /// Meta-data used by log implementations.
     pub(crate) metadata: LM,
+
+    // AffinityManager
+    pub(crate) affinity_mngr: AffinityManager,
 }
 
 impl<T, LM, M> fmt::Debug for Log<T, LM, M>
@@ -215,7 +218,7 @@ where
     ///
     /// ```
     /// use nr2::log::Log;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
     /// enum Operation {
@@ -225,12 +228,12 @@ where
     /// }
     ///
     /// // Creates a log with `262_144` entries.
-    /// let l = Log::<Operation, (), ()>::new_with_entries(1 << 18, ());
+    /// let l = Log::<Operation, (), ()>::new_with_entries(1 << 18, (), AffinityManager::default());
     /// ```
     ///
     /// This method allocates memory for the log upfront. No further allocations
     /// will be performed once this method returns.
-    pub fn new_with_entries(num: usize, metadata: LM) -> Self {
+    pub fn new_with_entries(num: usize, metadata: LM, affinity_mngr: AffinityManager) -> Self {
         // Allocate the log
         let mut v = Vec::with_capacity(Log::<T, LM, M>::entries_to_log_entries(num));
         for _ in 0..v.capacity() {
@@ -256,6 +259,7 @@ where
                 replica_inventory: AtomicUsize::new(1usize),
                 lmasks: fls,
                 metadata,
+                affinity_mngr,
             }
         }
         // `AtomicUsize::new` is not const in loom. This code block (including arr
@@ -272,6 +276,7 @@ where
                 replica_inventory: AtomicUsize::new(1usize),
                 lmasks: fls,
                 metadata,
+                affinity_mngr,
             }
         }
     }
@@ -291,7 +296,7 @@ where
     ///
     /// ```
     /// use nr2::log::Log;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// // Operation type that will be stored on the log.
     /// #[derive(Clone)]
     /// enum Operation {
@@ -301,10 +306,10 @@ where
     /// }
     ///
     /// // Creates a ~1 MiB sized log.
-    /// let l = Log::<Operation, (), ()>::new_with_bytes(1 * 1024 * 1024, ());
+    /// let l = Log::<Operation, (), ()>::new_with_bytes(1 * 1024 * 1024, (), AffinityManager::default());
     /// ```
-    pub fn new_with_bytes(bytes: usize, metadata: LM) -> Self {
-        Log::new_with_entries(Self::bytes_to_log_entries(bytes), metadata)
+    pub fn new_with_bytes(bytes: usize, metadata: LM, affinity_mngr: AffinityManager) -> Self {
+        Log::new_with_entries(Self::bytes_to_log_entries(bytes), metadata, affinity_mngr)
     }
 
     /// Constructs and returns a log of (approximately) [`DEFAULT_LOG_BYTES`]
@@ -312,8 +317,12 @@ where
     ///
     /// # See also
     /// - [`Log::new_with_bytes`]
-    pub fn new_with_metadata(metadata: LM) -> Self {
-        Log::new_with_entries(Self::bytes_to_log_entries(DEFAULT_LOG_BYTES), metadata)
+    pub fn new_with_metadata(metadata: LM, affinity_mngr: AffinityManager) -> Self {
+        Log::new_with_entries(
+            Self::bytes_to_log_entries(DEFAULT_LOG_BYTES),
+            metadata,
+            affinity_mngr,
+        )
     }
 
     /// Determines the number of entries in the log. This is likely just `entries` rounded
@@ -361,7 +370,7 @@ where
     ///
     /// ```
     /// use nr2::log::Log;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// // Operation type that will go onto the log.
     /// #[derive(Clone)]
     /// enum Operation {
@@ -371,7 +380,7 @@ where
     /// }
     ///
     /// // Creates a 1 Mega Byte sized log.
-    /// let l = Log::<Operation, (), ()>::new_with_entries(4 * 1024, ());
+    /// let l = Log::<Operation, (), ()>::new_with_entries(4 * 1024, (), AffinityManager::default());
     ///
     /// // Registers against the log. `idx` can now be used to append operations
     /// // to the log, and execute these operations.
@@ -601,7 +610,7 @@ where
     /// }
     ///
     /// // We register two replicas here, `idx1` and `idx2`.
-    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, ());
+    /// let l = Log::<Operation>::new_with_bytes(1 * 1024 * 1024, (), AffinityManager::default());
     /// let idx1 = l.register().expect("Failed to register with the Log.");
     /// let idx2 = l.register().expect("Failed to register with the Log.");
     /// let ops = [Operation::Write(100), Operation::Read];
@@ -663,7 +672,7 @@ where
     ///
     /// Constructs a log of approximately [`DEFAULT_LOG_BYTES`] bytes.
     fn default() -> Self {
-        Log::new_with_bytes(DEFAULT_LOG_BYTES, LM::default())
+        Log::new_with_bytes(DEFAULT_LOG_BYTES, LM::default(), AffinityManager::default())
     }
 }
 
@@ -706,7 +715,8 @@ mod tests {
     // Tests if a small log can be correctly constructed.
     #[test]
     fn test_std_log_create() {
-        let l = Log::<Operation, (), ()>::new_with_bytes(1024 * 1024, ());
+        let l =
+            Log::<Operation, (), ()>::new_with_bytes(1024 * 1024, (), AffinityManager::default());
         let n = (1024 * 1024) / Log::<Operation, (), ()>::entry_size();
         assert_eq!(l.slog.len(), n);
         assert_eq!(l.head.load(Ordering::Relaxed), 0);
@@ -726,14 +736,14 @@ mod tests {
     // Tests if the constructor allocates enough space for GC.
     #[test]
     fn test_log_min_size() {
-        let l = Log::<Operation, (), ()>::new_with_bytes(1024, ());
+        let l = Log::<Operation, (), ()>::new_with_bytes(1024, (), AffinityManager::default());
         assert_eq!(l.slog.len(), 2 * GC_FROM_HEAD);
     }
 
     // Tests if the constructor allocates enough space for GC.
     #[test]
     fn test_log_min_size2() {
-        let l = Log::<Operation, (), ()>::new_with_entries(1, ());
+        let l = Log::<Operation, (), ()>::new_with_entries(1, (), AffinityManager::default());
         assert_eq!(l.slog.len(), 2 * GC_FROM_HEAD);
     }
 
@@ -741,7 +751,8 @@ mod tests {
     // are a power of two.
     #[test]
     fn test_log_power_of_two() {
-        let l = Log::<Operation, (), ()>::new_with_bytes(524 * 1024, ());
+        let l =
+            Log::<Operation, (), ()>::new_with_bytes(524 * 1024, (), AffinityManager::default());
         let n = ((524 * 1024) / Log::<Operation, (), ()>::entry_size()).checked_next_power_of_two();
         assert_eq!(l.slog.len(), n.unwrap());
     }
@@ -750,7 +761,8 @@ mod tests {
     // are a power of two.
     #[test]
     fn test_log_power_of_two2() {
-        let l = Log::<Operation, (), ()>::new_with_entries(524 * 1024, ());
+        let l =
+            Log::<Operation, (), ()>::new_with_entries(524 * 1024, (), AffinityManager::default());
         let n = (524 * 1024usize).checked_next_power_of_two();
         assert_eq!(l.slog.len(), n.unwrap());
     }
@@ -777,14 +789,18 @@ mod tests {
     // Tests if we can correctly index into the shared log.
     #[test]
     fn test_log_index() {
-        let l = Log::<Operation, (), ()>::new_with_bytes(2 * 1024 * 1024, ());
+        let l = Log::<Operation, (), ()>::new_with_bytes(
+            2 * 1024 * 1024,
+            (),
+            AffinityManager::default(),
+        );
         assert_eq!(l.index(99000), 696);
     }
 
     // Tests if we can correctly register with the shared log.
     #[test]
     fn test_log_register() {
-        let l = Log::<Operation, (), ()>::new_with_bytes(1024, ());
+        let l = Log::<Operation, (), ()>::new_with_bytes(1024, (), AffinityManager::default());
         assert_eq!(l.register(), Some(LogToken(1)));
         assert_eq!(l.replica_count(), 2);
     }

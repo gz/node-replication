@@ -152,7 +152,6 @@ fn sequential_test() {
     replica.verify(&nrstack.log, v);
 }
 
-/*
 /// A stack to verify that the log works correctly with multiple threads.
 #[derive(Eq, PartialEq, Clone)]
 struct VerifyStack {
@@ -253,7 +252,7 @@ impl Dispatch for VerifyStack {
                 if val == 0 {
                     // Would be nice to assert this but if it runs in release
                     // mode without enough #total ops this will fail:
-                    //assert_eq!(self.per_replica_counter.len(), 8, "Popped a final element from a thread before seeing elements from every thread.");
+                    assert_eq!(self.per_replica_counter.len(), 8, "Popped a final element from a thread before seeing elements from every thread.");
                     //println!("per_replica_counter ={:?}", per_replica_counter);
                 }
                 Some(ele)
@@ -268,41 +267,31 @@ impl Dispatch for VerifyStack {
 fn parallel_push_sequential_pop_test() {
     let t = 4usize;
     let r = 2usize;
-    let l = 32usize;
     let nop: u16 = 50000;
 
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
-        l * 1024 * 1024,
-        (),
-        AffinityManager::default(),
-    ));
-
-    let mut replicas = Vec::with_capacity(r);
-    for _i in 0..r {
-        let ltkn = log.register().expect("Register should work");
-        replicas.push(Arc::new(Replica::<VerifyStack>::new(ltkn)));
-    }
+    let replicas = NonZeroUsize::new(r).unwrap();
+    let nrstack_main =
+        Arc::new(NodeReplicated::<Stack>::new(replicas, |_ac| 0).expect("Can't create Ds"));
 
     let mut threads = Vec::new();
     let barrier = Arc::new(Barrier::new(t * r));
 
     for i in 0..r {
         for j in 0..t {
-            let replica = replicas[i].clone();
-            let log = log.clone();
+            let nrstack = nrstack_main.clone();
             let b = barrier.clone();
             let child = thread::spawn(move || {
                 let tid: u32 = (i * t + j) as u32;
                 //println!("tid = {} i={} j={}", tid, i, j);
-                let idx = replica
-                    .register()
+                let idx = nrstack
+                    .register(i)
                     .expect("Failed to register with replica.");
 
                 // 1. Insert phase
                 b.wait();
                 for i in 0..nop {
-                    replica
-                        .execute_mut(&log, OpWr::Push((i as u32) << 16 | tid), idx)
+                    nrstack
+                        .execute_mut(OpWr::Push((i as u32) << 16 | tid), idx)
                         .unwrap();
                 }
             });
@@ -320,17 +309,17 @@ fn parallel_push_sequential_pop_test() {
 
     // Verify by popping everything off all replicas:
     for i in 0..r {
-        let replica = replicas[i].clone();
-        let token = replica.register().unwrap();
+        let token = nrstack_main.register(i).unwrap();
         for _j in 0..t {
             for _z in 0..nop {
-                replica.execute(&log, OpRd::Peek, token).unwrap();
-                replica.execute_mut(&log, OpWr::Pop, token).unwrap();
+                nrstack_main.execute(OpRd::Peek, token).unwrap();
+                nrstack_main.execute_mut(OpWr::Pop, token).unwrap();
             }
         }
     }
 }
 
+/*
 /// Many threads run in parallel, each pushing a unique increasing element into the stack.
 /// Then, many threads run in parallel, each popping an element and checking that the
 /// elements that came from a given thread are monotonically decreasing.

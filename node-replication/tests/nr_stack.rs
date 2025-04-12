@@ -270,7 +270,7 @@ fn parallel_push_sequential_pop_test() {
 
     let replicas = NonZeroUsize::new(r).unwrap();
     let nrstack_main =
-        Arc::new(NodeReplicated::<Stack>::new(replicas, |_ac| 0).expect("Can't create Ds"));
+        Arc::new(NodeReplicated::<VerifyStack>::new(replicas, |_ac| 0).expect("Can't create Ds"));
 
     let mut threads = Vec::new();
     let barrier = Arc::new(Barrier::new(t * r));
@@ -329,7 +329,7 @@ fn parallel_push_and_pop_test() {
 
     let replicas = NonZeroUsize::new(r).unwrap();
     let nrstack_main =
-        Arc::new(NodeReplicated::<Stack>::new(replicas, |_ac| 0).expect("Can't create Ds"));
+        Arc::new(NodeReplicated::<VerifyStack>::new(replicas, |_ac| 0).expect("Can't create Ds"));
 
     let mut threads = Vec::new();
     let barrier = Arc::new(Barrier::new(t * r));
@@ -373,9 +373,15 @@ fn parallel_push_and_pop_test() {
     }
 }
 
-/*
-fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64) {
-    let idx = r.register().expect("Failed to register with Replica.");
+fn bench(
+    nrstack: Arc<NodeReplicated<Stack>>,
+    replica: usize,
+    nop: usize,
+    barrier: Arc<Barrier>,
+) -> (u64, u64) {
+    let idx = nrstack
+        .register(replica)
+        .expect("Failed to register with Replica.");
 
     let mut orng = thread_rng();
     let mut arng = thread_rng();
@@ -386,7 +392,7 @@ fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barri
         match op % 2usize {
             0usize => ops.push(OpWr::Pop),
             1usize => ops.push(OpWr::Push(arng.gen())),
-            _ => unreachable!(),
+            _ => panic!("This should not happen!"),
         }
     }
     barrier.wait();
@@ -395,7 +401,7 @@ fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barri
         if nop % 1000 == 0 {
             std::thread::yield_now();
         }
-        r.execute_mut(&log, ops[i], idx).expect("should work");
+        nrstack.execute_mut(ops[i], idx);
     }
 
     barrier.wait();
@@ -409,31 +415,21 @@ fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barri
 fn replicas_are_equal() {
     let t = 4usize;
     let r = 2usize;
-    let l = 1usize;
     let n = 50usize;
 
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
-        l * 1024 * 1024,
-        (),
-        AffinityManager::default(),
-    ));
-
-    let mut replicas = Vec::with_capacity(r);
-    for _i in 0..r {
-        let ltkn = log.register().expect("Register should work");
-        replicas.push(Arc::new(Replica::<Stack>::new(ltkn)));
-    }
+    let replicas = NonZeroUsize::new(r).unwrap();
+    let nrstack_main =
+        Arc::new(NodeReplicated::<Stack>::new(replicas, |_ac| 0).expect("Can't create Ds"));
 
     let mut threads = Vec::new();
     let barrier = Arc::new(Barrier::new(t * r));
 
     for i in 0..r {
         for _j in 0..t {
-            let r = replicas[i].clone();
-            let log = log.clone();
+            let nrstack = nrstack_main.clone();
             let o = n.clone();
             let b = barrier.clone();
-            let child = thread::spawn(move || bench(r, &log, o, b));
+            let child = thread::spawn(move || bench(nrstack, i, o, b));
             threads.push(child);
         }
     }
@@ -452,7 +448,8 @@ fn replicas_are_equal() {
         d0.extend_from_slice(&data.storage);
         p0.extend_from_slice(&data.storage);
     };
-    replicas[0].verify(&log, v);
+
+    nrstack_main.replicas[&0].verify(&nrstack_main.log, v);
 
     let mut d1 = vec![];
     let mut p1 = vec![];
@@ -460,9 +457,8 @@ fn replicas_are_equal() {
         d1.extend_from_slice(&data.storage);
         p1.extend_from_slice(&data.storage);
     };
-    replicas[1].verify(&log, v);
+    nrstack_main.replicas[&1].verify(&nrstack_main.log, v);
 
     assert_eq!(d0, d1, "Data-structures don't match.");
     assert_eq!(p0, p1, "Removed elements in each replica dont match.");
 }
-*/

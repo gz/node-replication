@@ -70,7 +70,8 @@
 //! }
 //! ```
 use alloc::collections::BTreeMap;
-use alloc::{boxed::Box, vec::Vec};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::Sync;
 use core::num::NonZeroUsize;
@@ -99,8 +100,6 @@ pub mod rwlock;
 use crate::nr::context::Context;
 pub use log::{Log, MAX_REPLICAS_PER_LOG};
 pub use replica::{CombinerLock, Replica, ReplicaError, ReplicaId, ReplicaToken};
-
-use self::atomic_bitmap::AtomicBitmap;
 
 const MAX_THREADS_PER_INSTANCE: usize = MAX_REPLICAS_PER_LOG * MAX_THREADS_PER_REPLICA;
 
@@ -242,7 +241,7 @@ type AffinityChangeFn = dyn Fn(AffinityChange) -> usize + Send + Sync;
 /// by a user.
 
 pub struct AffinityManager {
-    af_change_fn: Box<AffinityChangeFn>,
+    af_change_fn: Arc<AffinityChangeFn>,
 }
 
 impl AffinityManager {
@@ -252,7 +251,7 @@ impl AffinityManager {
     /// - `af_change_fn`: User provided function, or can be some default for
     /// e.g., Linux that relies on migrating threads a NUMA aware mallocs and
     /// the first-touch policy.
-    pub fn new(af_change_fn: Box<AffinityChangeFn>) -> Self {
+    pub fn new(af_change_fn: Arc<AffinityChangeFn>) -> Self {
         Self { af_change_fn }
     }
 
@@ -261,41 +260,32 @@ impl AffinityManager {
     /// The token will call the user-provided function to change the memory
     /// affinity and once it gets dropped, it will tell the user to revert the
     /// change.
-    fn switch(&self, rid: ReplicaId) -> AffinityToken<'_> {
-        AffinityToken::new(&self.af_change_fn, rid)
-    }
-}
-
-impl Default for AffinityManager {
-    fn default() -> Self {
-        AffinityManager::new(Box::new(|affinity_tkn| match affinity_tkn {
-            AffinityChange::Replica(n) => n,
-            AffinityChange::Revert(n) => n,
-        }))
+    fn switch(&self, rid: ReplicaId) -> AffinityToken {
+        AffinityToken::new(self.af_change_fn.clone(), rid)
     }
 }
 
 /// A token that is in charge of orchestrating memory affinity changes for a
 /// thread.
-struct AffinityToken<'f> {
-    af_chg_fn: &'f dyn Fn(AffinityChange) -> usize,
+struct AffinityToken {
+    af_chg_fn: Arc<dyn Fn(AffinityChange) -> usize>,
     old: usize,
 }
 
-impl<'f> AffinityToken<'f> {
+impl AffinityToken {
     /// Creating the token will request the memory affinity to be changes to to
     /// match the memory affinity of `rid`.
-    fn new(af_chg_fn: &'f dyn Fn(AffinityChange) -> usize, rid: ReplicaId) -> Self {
-        let old = af_chg_fn(AffinityChange::Replica(rid));
+    fn new(af_chg_fn: Arc<dyn Fn(AffinityChange) -> usize>, rid: ReplicaId) -> Self {
+        let old = (*af_chg_fn)(AffinityChange::Replica(rid));
         Self { af_chg_fn, old }
     }
 }
 
-impl<'f> Drop for AffinityToken<'f> {
+impl Drop for AffinityToken {
     /// Dropping the token will request to revert the affinity change that was
     /// made during creation.
     fn drop(&mut self) {
-        (self.af_chg_fn)(AffinityChange::Revert(self.old));
+        (*self.af_chg_fn)(AffinityChange::Revert(self.old));
     }
 }
 
@@ -412,7 +402,7 @@ where
     /// ```
     pub fn new(
         num_replicas: NonZeroUsize,
-        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + Clone + 'static,
+        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
     ) -> Result<Self, NodeReplicatedError> {
         Self::with_log_size(num_replicas, chg_mem_affinity, log::DEFAULT_LOG_BYTES)
     }
@@ -421,32 +411,33 @@ where
     /// (provided in bytes) for the [`Log`].
     pub fn with_log_size(
         num_replicas: NonZeroUsize,
-        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + Clone + 'static,
+        chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
         log_size: usize,
     ) -> Result<Self, NodeReplicatedError> {
         assert!(num_replicas.get() <= MAX_REPLICAS_PER_LOG);
-        let mem_fn = Box::try_new(chg_mem_affinity)?;
+
+        // This is a hack to make sure the arc for the chg_mem_affinity is allocated
+        // in a specific affinity; due to chicken/egg problems, we just call func directly
+        let revert = chg_mem_affinity(AffinityChange::Replica(0));
+        let log = Log::new_with_bytes(log_size, ());
+        let mem_fn = Arc::new(chg_mem_affinity);
         let affinity_mngr = AffinityManager::new(mem_fn.clone());
-        let log = Log::new_with_bytes(log_size, (), affinity_mngr);
-        let affinity_mngr = AffinityManager::new(mem_fn);
 
         let mut contexts = Vec::with_capacity(MAX_REPLICAS_PER_LOG * MAX_THREADS_PER_REPLICA);
         for _idx in 0..(MAX_REPLICAS_PER_LOG * MAX_THREADS_PER_REPLICA) {
             contexts.push(Default::default());
         }
-
         let mut replicas = BTreeMap::new();
         let mut replica_list = ArrayVec::new();
+        let _revert = (*mem_fn)(AffinityChange::Revert(revert));
+
         for replica_id in 0..num_replicas.get() {
+            let _afinity_tkn = affinity_mngr.switch(replica_id);
             let log_token = log
                 .register()
                 .expect("Succeeds (num_replicas < MAX_REPLICAS_PER_LOG)");
-            let r = {
-                // Allocate the replica on the proper NUMA node
-                let _aff_tkn = affinity_mngr.switch(replica_id);
-                Replica::new(log_token)
-                // aff_tkn is dropped here
-            };
+            let r_affinity_mngr = AffinityManager::new(mem_fn.clone());
+            let r = Replica::new(log_token, r_affinity_mngr);
             replica_list.push(replica_id);
             replicas.insert(replica_id, r);
         }
@@ -509,7 +500,8 @@ where
         let r = {
             // Allocate the replica on the proper NUMA node
             let _aff_tkn = self.affinity_mngr.switch(replica_id);
-            let r = Replica::new(log_token.clone());
+            let r_affinity_mngr = AffinityManager::new(self.affinity_mngr.af_change_fn.clone());
+            let r = Replica::new(log_token.clone(), r_affinity_mngr);
 
             // get the most up to date replica
             let (max_replica_idx, max_local_tail) = self.log.find_max_tail();
@@ -605,7 +597,7 @@ where
     /// `ds` will be cloned for each replica.
     pub fn with_data(
         _num_replicas: NonZeroUsize,
-        _chg_mem_affinity: impl Fn(AffinityChange) -> usize + Send + Sync + 'static,
+        _chg_mem_affinity: &'static (impl Fn(AffinityChange) -> usize + Send + Sync + 'static),
         _ds: D,
     ) -> Result<Self, NodeReplicatedError> {
         unimplemented!("complete me")
@@ -675,7 +667,7 @@ where
             // so technically its not needed to supply it again (but we currently do it anyways...)
             r.execute_mut_locked(&self.log, contexts, combiner_lock)?;
         } else {
-            r.execute_mut(&self.log, contexts)?;
+            r.execute_mut(&self.log, contexts, tkn.rid)?;
         }
 
         Ok(self.get_response(tkn, r))
@@ -769,7 +761,7 @@ where
                         {
                             assert_ne!(stuck_ridx, tkn.rid);
                             if let Some(r) = self.replicas.get(&stuck_ridx) {
-                                r.sync(&self.log)
+                                r.sync(&self.log, tkn.rid)
                             } else {
                                 panic!("Replica not found??");
                             }
@@ -788,7 +780,7 @@ where
                     debug_assert_ne!(ridx, tkn.rid);
                     //warn!("execute_mut ResolveOp::Sync {}", ridx);
                     if let Some(r) = self.replicas.get(&ridx) {
-                        r.try_sync(&self.log)
+                        r.try_sync(&self.log, tkn.rid)
                     } else {
                         panic!("Replica not found??");
                     }
@@ -903,7 +895,7 @@ where
                     // Holds trivially because of all the other asserts in this function
                     debug_assert_ne!(ridx, tkn.rid);
                     if let Some(r) = self.replicas.get(&ridx) {
-                        r.try_sync(&self.log)
+                        r.try_sync(&self.log, tkn.rid)
                     } else {
                         panic!("Replica not found??");
                     }
@@ -926,7 +918,7 @@ where
         tkn: ThreadToken,
         resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
     ) {
-        resp.set(async move { self.execute_mut(op, tkn) });
+        resp.set(async move { self.execute_mut(op, tkn, tkn.rid) });
     }
 
     /// Executes an immutable operation asynchronously on a replica, and returns
@@ -942,7 +934,7 @@ where
         tkn: ThreadToken,
         resp: &mut ReusableBoxFuture<'a, <D as Dispatch>::Response>,
     ) {
-        resp.set(async move { self.execute(op, tkn) });
+        resp.set(async move { self.execute(op, tkn, tkn.rid) });
     }
 
     #[inline(always)]
@@ -1030,7 +1022,7 @@ where
                     tkn,
                     &self.contexts[tkn.gtid()]
                 );
-                let _r: () = self.try_combine(replica).unwrap();
+                let _r: () = self.try_combine(replica, tkn.rid).unwrap();
                 iter = 0;
             }
         }
@@ -1038,15 +1030,19 @@ where
 
     #[doc(hidden)]
     #[inline(always)]
-    fn try_combine<'a>(&'a self, r: &'a Replica<D>) -> Result<(), ReplicaError<D>> {
+    fn try_combine<'a>(
+        &'a self,
+        r: &'a Replica<D>,
+        current_affinity: usize,
+    ) -> Result<(), ReplicaError<D>> {
         let contexts = self.context_iterator(r);
-        r.try_combine(&self.log, contexts)
+        r.try_combine(&self.log, contexts, current_affinity)
     }
 
     #[doc(hidden)]
     pub fn sync(&self, tkn: ThreadToken) {
         let r = self.select_replica(tkn);
-        r.sync(&self.log)
+        r.sync(&self.log, tkn.rid)
     }
 }
 
@@ -1397,7 +1393,7 @@ mod test {
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
 
         assert!(async_ds.make_pending(121, ttkn_a.gtid()));
-        assert!(async_ds.try_combine(&async_ds.replicas[&0]).is_ok());
+        assert!(async_ds.try_combine(&async_ds.replicas[&0], 0).is_ok());
 
         assert_eq!(async_ds.replicas[&0].combiner.load(Ordering::SeqCst), 0);
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 1);
@@ -1414,7 +1410,7 @@ mod test {
 
         async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
         assert!(async_ds.make_pending(121, ttkn_a.gtid()));
-        assert!(async_ds.try_combine(&async_ds.replicas[&0]).is_ok());
+        assert!(async_ds.try_combine(&async_ds.replicas[&0], 0).is_ok());
 
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 1);
         assert_eq!(async_ds.contexts[0].res(), Some(Ok(107)));
@@ -1431,7 +1427,7 @@ mod test {
         async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
         async_ds.replicas[&0].combiner.store(8, Ordering::SeqCst);
         assert!(async_ds.make_pending(121, ttkn_a.gtid()));
-        assert!(async_ds.try_combine(&async_ds.replicas[&0]).is_ok());
+        assert!(async_ds.try_combine(&async_ds.replicas[&0], 0).is_ok());
 
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 0);
         assert_eq!(async_ds.contexts[0].res(), None);

@@ -94,7 +94,6 @@ fn main() {
                 Log::<<NrHashMap as Dispatch>::WriteOperation>::new_with_bytes(
                     LOG_SIZE_BYTES,
                     LogMetaData::new(i + 1),
-                    AffinityManager::default(),
                 ),
             );
             logs.push(log);

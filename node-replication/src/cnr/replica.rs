@@ -160,7 +160,6 @@ where
     /// use nr2::cnr::Log;
     /// use nr2::cnr::LogMapper;
     /// use nr2::cnr::Replica;
-    /// use nr2::nr::AffinityManager;
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
@@ -302,7 +301,6 @@ where
     /// use nr2::cnr::Log;
     /// use nr2::cnr::LogMapper;
     /// use nr2::cnr::Replica;
-    /// use nr2::nr::AffinityManager;
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
@@ -393,7 +391,6 @@ where
     /// use nr2::cnr::Log;
     /// use nr2::cnr::LogMapper;
     /// use nr2::cnr::Replica;
-    /// use nr2::nr::AffinityManager;
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
@@ -487,7 +484,6 @@ where
     /// use nr2::cnr::Log;
     /// use nr2::cnr::LogMapper;
     /// use nr2::cnr::Replica;
-    /// use nr2::nr::AffinityManager;
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
@@ -641,7 +637,6 @@ where
     /// use nr2::cnr::Log;
     /// use nr2::cnr::LogMapper;
     /// use nr2::cnr::Replica;
-    /// use nr2::nr::AffinityManager;
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
@@ -740,7 +735,6 @@ where
     /// use nr2::cnr::Log;
     /// use nr2::cnr::LogMapper;
     /// use nr2::cnr::Replica;
-    /// use nr2::nr::AffinityManager;
     /// use core::sync::atomic::{AtomicUsize, Ordering};
     /// use std::sync::Arc;
     ///
@@ -1176,7 +1170,6 @@ mod test {
     extern crate std;
 
     use crate::cnr::log::LogMetaData;
-    use crate::nr::AffinityManager;
 
     use super::*;
     use std::vec;
@@ -1227,7 +1220,6 @@ mod test {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
             1024,
             LogMetaData::new(1),
-            AffinityManager::default(),
         ));
         let repl = Replica::<Data>::new(vec![slog]);
         assert_eq!(repl.logstate[0].idx.0, 1);
@@ -1247,7 +1239,6 @@ mod test {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
             1024,
             LogMetaData::new(1),
-            AffinityManager::default(),
         ));
         let repl = Replica::<Data>::new(vec![slog]);
         assert_eq!(repl.register(), Some(ReplicaToken(1)));
@@ -1263,7 +1254,6 @@ mod test {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
             1024,
             LogMetaData::new(1),
-            AffinityManager::default(),
         ));
         let repl = Replica::<Data>::new(vec![slog]);
         repl.next
@@ -1277,7 +1267,6 @@ mod test {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
             1024,
             LogMetaData::new(1),
-            AffinityManager::default(),
         ));
         let repl = Replica::<Data>::new(vec![slog]);
 
@@ -1328,7 +1317,6 @@ mod test {
         let slog = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
             1024,
             LogMetaData::new(1),
-            AffinityManager::default(),
         ));
         let repl = Replica::<Data>::new(vec![slog]);
 
@@ -1566,7 +1554,6 @@ mod test {
                 Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
                     4 * 1024 * 1024,
                     LogMetaData::new(i + 1),
-                    AffinityManager::default(),
                 ),
             ));
         }
@@ -1592,7 +1579,6 @@ mod test {
                 Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
                     4 * 1024 * 1024,
                     LogMetaData::new(i + 1),
-                    AffinityManager::default(),
                 ),
             ));
         }
@@ -1620,7 +1606,6 @@ mod test {
                 Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
                     4 * 1024 * 1024,
                     LogMetaData::new(i + 1),
-                    AffinityManager::default(),
                 ),
             ));
         }
@@ -1649,7 +1634,6 @@ mod test {
                 Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
                     4 * 1024 * 1024,
                     LogMetaData::new(i + 1),
-                    AffinityManager::default(),
                 ),
             ));
         }
@@ -1684,7 +1668,6 @@ mod test {
                 Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
                     4 * 1024 * 1024,
                     LogMetaData::new(i + 1),
-                    AffinityManager::default(),
                 ),
             ));
         }
@@ -1715,7 +1698,6 @@ mod test {
                 Log::<<ScanDS as Dispatch>::WriteOperation>::new_with_bytes(
                     4 * 1024 * 1024,
                     LogMetaData::new(i + 1),
-                    AffinityManager::default(),
                 ),
             ));
         }

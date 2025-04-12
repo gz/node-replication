@@ -27,6 +27,8 @@ use super::Dispatch;
 use super::ThreadToken;
 use super::MAX_THREADS_PER_INSTANCE;
 
+use crate::nr::AffinityManager;
+use crate::nr::AffinityToken;
 pub use crate::replica::ReplicaId;
 pub use crate::replica::ReplicaToken;
 pub use crate::replica::MAX_THREADS_PER_REPLICA;
@@ -160,6 +162,9 @@ where
 
     /// Bitmap for which threads are submitting operations (registered) to this replica
     pub thread_routing: AtomicBitmap,
+
+    /// Used to manage per-replica commbiner affinity
+    pub affinity_mngr: AffinityManager,
 }
 
 /// The Replica is [`Sync`].
@@ -194,10 +199,11 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
+    /// use std::sync::Arc;
     /// use nr2::nr::Dispatch;
     /// use nr2::nr::Log;
     /// use nr2::nr::Replica;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// // The data structure we want replicated.
     /// #[derive(Default, Clone)]
     /// struct Data {
@@ -233,10 +239,11 @@ where
     ///
     /// // Create a replica that uses the above log.
     /// let ltkn = log.register().unwrap();
-    /// let replica = Replica::<Data>::new(ltkn);
+    /// let affinity_mngr = AffinityManager::new(Arc::new(|_a| 0));
+    /// let replica = Replica::<Data>::new(ltkn, affinity_mngr);
     /// ```
-    pub fn new(log_tkn: LogToken) -> Replica<D> {
-        Replica::with_data(log_tkn, Default::default())
+    pub fn new(log_tkn: LogToken, affinity_mngr: AffinityManager) -> Replica<D> {
+        Replica::with_data(log_tkn, affinity_mngr, Default::default())
     }
 }
 
@@ -249,8 +256,8 @@ pub struct CombinerLock<'a, D>
 where
     D: Sized + Dispatch + Sync + Clone,
 {
-    // TODO(erika): could use cl to determine if change memory?
     replica: &'a Replica<D>,
+    affinity_tkn: Option<AffinityToken>,
 }
 
 impl<'a, D> CombinerLock<'a, D>
@@ -262,8 +269,16 @@ where
     /// # Safety
     /// This should basically only ever be called in [`Replica::acquire_combiner_lock()`]
     /// if the compare exchange succeeds.
-    unsafe fn new(replica: &'a Replica<D>) -> Self {
-        Self { replica }
+    unsafe fn new(replica: &'a Replica<D>, current_affinity: usize) -> Self {
+        let affinity_tkn = if current_affinity != replica.replica_id() {
+            Some(replica.affinity_mngr.switch(replica.replica_id()))
+        } else {
+            None
+        };
+        Self {
+            replica,
+            affinity_tkn,
+        }
     }
 }
 
@@ -310,7 +325,7 @@ where
     ///   [`Copy`] of `d` is passed to every Replica object of the replicated
     ///   data-structure. If not, operations when executed on different replicas
     ///   may give different results.
-    pub fn with_data(log_tkn: LogToken, d: D) -> Replica<D> {
+    pub fn with_data(log_tkn: LogToken, affinity_mngr: AffinityManager, d: D) -> Replica<D> {
         Replica {
             log_tkn,
             combiner: CachePadded::new(AtomicUsize::new(0)),
@@ -338,6 +353,7 @@ where
                 ),
             data: CachePadded::new(RwLock::<D>::new(d)),
             thread_routing: AtomicBitmap::default(),
+            affinity_mngr,
         }
     }
 
@@ -352,10 +368,11 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
+    /// use std::sync::Arc;
     /// use nr2::nr::Dispatch;
     /// use nr2::nr::Log;
     /// use nr2::nr::Replica;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// #[derive(Default, Clone)]
     /// struct Data {
     ///     junk: u64,
@@ -384,7 +401,8 @@ where
     ///
     /// let log = Log::<<Data as Dispatch>::WriteOperation>::default();
     /// let logtkn = log.register().unwrap();
-    /// let replica = Replica::<Data>::new(logtkn);
+    /// let affinity_mngr = AffinityManager::new(Arc::new(|_a| 0));
+    /// let replica = Replica::<Data>::new(logtkn, affinity_mngr);
     ///
     /// // Calling register() returns a thread token that can be used to execute
     /// // operations against the replica.
@@ -443,10 +461,11 @@ where
     ///
     /// ```
     /// #![feature(generic_associated_types)]
+    /// use std::sync::Arc;
     /// use nr2::nr::Dispatch;
     /// use nr2::nr::Log;
     /// use nr2::nr::Replica;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// #[derive(Default, Clone)]
     /// struct Data {
     ///     junk: u64,
@@ -475,7 +494,8 @@ where
     ///
     /// let log = Log::<<Data as Dispatch>::WriteOperation>::default();
     /// let logtkn = log.register().unwrap();
-    /// let replica = Replica::<Data>::new(logtkn);
+    /// let affinity_mngr = AffinityManager::new(Arc::new(|_a| 0));
+    /// let replica = Replica::<Data>::new(logtkn, affinity_mngr);
     /// let thrtkn = replica.register().expect("Failed to register with replica.");
     ///
     /// // execute_mut() can be used to write to the replicated data structure.
@@ -486,9 +506,10 @@ where
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
+        current_thread: usize,
     ) -> Result<(), ReplicaError<D>> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.try_combine(slog, contexts)
+        self.try_combine(slog, contexts, current_thread)
     }
 
     /// See [`Replica::execute_mut()`] for a general description of this method.
@@ -536,7 +557,7 @@ where
     /// use nr2::nr::Dispatch;
     /// use nr2::nr::Log;
     /// use nr2::nr::Replica;
-    ///
+    /// use nr2::nr::AffinityManager;
     /// use std::sync::Arc;
     ///
     /// #[derive(Default, Clone)]
@@ -567,7 +588,8 @@ where
     ///
     /// let log = Arc::new(Log::<<Data as Dispatch>::WriteOperation>::default());
     /// let logtkn = log.register().unwrap();
-    /// let replica = Replica::<Data>::new(logtkn);
+    /// let affinity_mngr = AffinityManager::new(Arc::new(|_a| 0));
+    /// let replica = Replica::<Data>::new(logtkn, affinity_mngr);
     /// let thrtkn = replica.register().expect("Failed to register with replica.");
     /// // let _wr = replica.execute_mut(&log, 100, thrtkn);
     ///
@@ -587,11 +609,13 @@ where
         idx: ThreadToken,
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
+        // TODO(erika): change reader affinity? Change outside of loop?
+
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
         while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            if let Err(e) = self.try_combine(slog, contexts.clone()) {
+            if let Err(e) = self.try_combine(slog, contexts.clone(), idx.rid) {
                 return Err((e, op));
             }
             spin_loop();
@@ -632,7 +656,7 @@ where
         // make this assert fail?), we can get rid of the while below...
         assert!(slog.is_replica_synced_for_reads(&self.log_tkn, ctail));
         while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            if let Err(e) = self.try_combine(slog, contexts.clone()) {
+            if let Err(e) = self.try_combine(slog, contexts.clone(), self.replica_id()) {
                 return Err((e, op));
             }
             spin_loop();
@@ -724,10 +748,10 @@ where
     ///
     /// # See also
     /// - [`Replica::try_sync`]
-    pub fn sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+    pub fn sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>, current_affinity: usize) {
         let ctail = slog.get_ctail();
         while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            self.try_sync(slog);
+            self.try_sync(slog, current_affinity);
             spin_loop();
         }
     }
@@ -748,9 +772,13 @@ where
     /// [`Replica::sync`] can lead to "a thundering herd effect" if many threads
     /// call it at the same time.
     #[inline(always)]
-    pub(crate) fn try_sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+    pub(crate) fn try_sync(
+        &self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        current_affinity: usize,
+    ) {
         // Try to become the combiner here. If this fails, then simply return.
-        if let Some(_combiner_lock) = self.acquire_combiner_lock() {
+        if let Some(_combiner_lock) = self.acquire_combiner_lock(current_affinity) {
             // Successfully became the combiner; perform one round of flat combining.
             self.exec(slog);
         }
@@ -758,7 +786,7 @@ where
 
     // Try to become acquire the combiner lock here. If this fails, then return None.
     #[inline(always)]
-    pub(crate) fn acquire_combiner_lock(&self) -> Option<CombinerLock<D>> {
+    pub(crate) fn acquire_combiner_lock(&self, current_affinity: usize) -> Option<CombinerLock<D>> {
         // First, check if there already is a flat combiner. If there is no active flat combiner
         // then try to acquire the combiner lock. If there is, then just return.
         for _ in 0..4 {
@@ -778,8 +806,7 @@ where
             loom::thread::yield_now();
             None
         } else {
-            // TODO(erika): hereeeee!
-            unsafe { Some(CombinerLock::new(self)) }
+            unsafe { Some(CombinerLock::new(self, current_affinity)) }
         }
     }
 
@@ -789,9 +816,10 @@ where
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
+        current_affinity: usize,
     ) -> Result<(), ReplicaError<D>> {
         // Try to become the combiner here. If this fails, then simply return.
-        if let Some(combiner_lock) = self.acquire_combiner_lock() {
+        if let Some(combiner_lock) = self.acquire_combiner_lock(current_affinity) {
             // Successfully became the combiner; perform one round of flat combining.
             self.combine(slog, contexts, combiner_lock)?;
             Ok(())
@@ -910,7 +938,7 @@ where
 pub(crate) mod test {
     extern crate std;
     use super::*;
-    use crate::nr::AffinityManager;
+    use alloc::sync::Arc;
 
     // Really dumb data structure to test against the Replica and shared log.
     #[derive(Default, Clone)]
@@ -936,13 +964,9 @@ pub(crate) mod test {
     // Tests whether we can construct a Replica given a log.
     #[test]
     fn test_replica_create() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
-            1024,
-            (),
-            AffinityManager::default(),
-        );
+        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
+        let repl = Replica::<Data>::new(lt, AffinityManager::new(Arc::new(|_a| 0)));
         assert_eq!(repl.combiner.load(Ordering::SeqCst), 0);
         assert_eq!(repl.next.load(Ordering::SeqCst), 0);
         //assert_eq!(repl.contexts.len(), MAX_THREADS_PER_REPLICA);
@@ -961,13 +985,9 @@ pub(crate) mod test {
     // Tests whether we can register with this replica and receive an idx.
     #[test]
     fn test_replica_register() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
-            1024,
-            (),
-            AffinityManager::default(),
-        );
+        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
+        let repl = Replica::<Data>::new(lt, AffinityManager::new(Arc::new(|_a| 0)));
         assert_eq!(repl.register(), Some(ThreadToken::new(0, ReplicaToken(0))));
         assert_eq!(repl.next.load(Ordering::SeqCst), 1);
         repl.next.store(17, Ordering::SeqCst);
@@ -978,13 +998,9 @@ pub(crate) mod test {
     // Tests whether registering more than the maximum limit of threads per replica is disallowed.
     #[test]
     fn test_replica_register_none() {
-        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(
-            1024,
-            (),
-            AffinityManager::default(),
-        );
+        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
         let lt = slog.register().unwrap();
-        let repl = Replica::<Data>::new(lt);
+        let repl = Replica::<Data>::new(lt, AffinityManager::new(Arc::new(|_a| 0)));
         repl.next
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
         assert!(repl.register().is_none());

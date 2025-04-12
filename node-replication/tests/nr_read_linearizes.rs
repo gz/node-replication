@@ -18,8 +18,6 @@
 use loom::sync::atomic::{AtomicBool, Ordering};
 use loom::sync::Arc;
 use loom::thread;
-
-use nr2::nr::AffinityManager;
 use nr2::nr::{Dispatch, Log, LogToken, Replica};
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
@@ -68,13 +66,8 @@ impl Dispatch for TheCounter {
 #[test]
 fn test_read_linearizes_no_gc() {
     loom::model(move || {
-        let log = Arc::new(
-            Log::<<TheCounter as Dispatch>::WriteOperation>::new_with_bytes(
-                4096,
-                (),
-                AffinityManager::default(),
-            ),
-        );
+        let log =
+            Arc::new(Log::<<TheCounter as Dispatch>::WriteOperation>::new_with_bytes(4096, ()));
 
         let ltkn1 = log.register().expect("Can't register");
         let r1 = Arc::new(Replica::<TheCounter>::new(ltkn1));
@@ -165,11 +158,7 @@ fn test_read_linearizes_with_gc() {
 
     b.check(move || {
         // Make a log with just 4 entries, on adding a second entry, we start GC
-        let log = Log::<<TheCounter as Dispatch>::WriteOperation>::new_with_entries(
-            4,
-            (),
-            AffinityManager::default(),
-        );
+        let log = Log::<<TheCounter as Dispatch>::WriteOperation>::new_with_entries(4, ());
         let ltkn = LogToken(3);
         log.append(&[OpWr::Noop, OpWr::Noop], &ltkn, |_op, _idx| {
             panic!("We're doing GC but we don't want to do it just yet...");

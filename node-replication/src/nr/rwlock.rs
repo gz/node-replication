@@ -14,7 +14,6 @@
 //! implementation which (with some modifications, see `loom_rwlock.rs`) we can
 //! use in the replica code.
 
-use crate::nr::AtomicBitmap;
 use core::cell::UnsafeCell;
 use core::default::Default;
 use core::hint::spin_loop;

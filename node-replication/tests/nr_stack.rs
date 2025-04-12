@@ -11,8 +11,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use nr2::nr::{AffinityManager, NodeReplicated};
-use nr2::nr::{Dispatch, Log, Replica};
+use nr2::nr::{Dispatch, NodeReplicated};
 
 use rand::{thread_rng, Rng};
 
@@ -289,9 +288,9 @@ fn parallel_push_sequential_pop_test() {
 
                 // 1. Insert phase
                 b.wait();
-                for i in 0..nop {
+                for k in 0..nop {
                     nrstack
-                        .execute_mut(OpWr::Push((i as u32) << 16 | tid), idx)
+                        .execute_mut(OpWr::Push((k as u32) << 16 | tid), idx)
                         .unwrap();
                 }
             });
@@ -319,7 +318,6 @@ fn parallel_push_sequential_pop_test() {
     }
 }
 
-/*
 /// Many threads run in parallel, each pushing a unique increasing element into the stack.
 /// Then, many threads run in parallel, each popping an element and checking that the
 /// elements that came from a given thread are monotonically decreasing.
@@ -327,49 +325,39 @@ fn parallel_push_sequential_pop_test() {
 fn parallel_push_and_pop_test() {
     let t = 4usize;
     let r = 2usize;
-    let l = 128usize;
     let nop: u16 = u16::MAX;
 
-    let log = Arc::new(Log::<<Stack as Dispatch>::WriteOperation>::new_with_bytes(
-        l * 1024 * 1024,
-        (),
-        AffinityManager::default(),
-    ));
-
-    let mut replicas = Vec::with_capacity(r);
-    for _i in 0..r {
-        let ltkn = log.register().expect("Register should work");
-        replicas.push(Arc::new(Replica::<VerifyStack>::new(ltkn)));
-    }
+    let replicas = NonZeroUsize::new(r).unwrap();
+    let nrstack_main =
+        Arc::new(NodeReplicated::<Stack>::new(replicas, |_ac| 0).expect("Can't create Ds"));
 
     let mut threads = Vec::new();
     let barrier = Arc::new(Barrier::new(t * r));
 
     for i in 0..r {
         for j in 0..t {
-            let replica = replicas[i].clone();
+            let nrstack = nrstack_main.clone();
             let b = barrier.clone();
-            let log = log.clone();
             let child = thread::spawn(move || {
                 let tid: u32 = (i * t + j) as u32;
                 //println!("tid = {} i={} j={}", tid, i, j);
-                let idx = replica
-                    .register()
+                let idx = nrstack
+                    .register(i)
                     .expect("Failed to register with replica.");
 
                 // 1. Insert phase
                 b.wait();
-                for i in 0..nop {
-                    replica
-                        .execute_mut(&log, OpWr::Push((i as u32) << 16 | tid), idx)
+                for k in 0..nop {
+                    nrstack
+                        .execute_mut(OpWr::Push((k as u32) << 16 | tid), idx)
                         .unwrap();
                 }
 
                 // 2. Dequeue phase, verification
                 b.wait();
                 for _i in 0..nop {
-                    replica.execute(&log, OpRd::Peek, idx).unwrap();
-                    replica.execute_mut(&log, OpWr::Pop, idx).unwrap();
+                    nrstack.execute(OpRd::Peek, idx).unwrap();
+                    nrstack.execute_mut(OpWr::Pop, idx).unwrap();
                 }
             });
             threads.push(child);
@@ -385,6 +373,7 @@ fn parallel_push_and_pop_test() {
     }
 }
 
+/*
 fn bench(r: Arc<Replica<Stack>>, log: &Log<OpWr>, nop: usize, barrier: Arc<Barrier>) -> (u64, u64) {
     let idx = r.register().expect("Failed to register with Replica.");
 

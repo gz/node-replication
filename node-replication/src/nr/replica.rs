@@ -249,6 +249,7 @@ pub struct CombinerLock<'a, D>
 where
     D: Sized + Dispatch + Sync + Clone,
 {
+    // TODO(erika): could use cl to determine if change memory?
     replica: &'a Replica<D>,
 }
 
@@ -692,7 +693,7 @@ where
             spin_loop();
         }
 
-        let mut data = self.data.write(&self.thread_routing);
+        let mut data = self.data.write(self.thread_routing.snapshot());
         let mut f = |o: <D as Dispatch>::WriteOperation, _mine: bool| {
             data.dispatch_mut(o);
         };
@@ -777,6 +778,7 @@ where
             loom::thread::yield_now();
             None
         } else {
+            // TODO(erika): hereeeee!
             unsafe { Some(CombinerLock::new(self)) }
         }
     }
@@ -802,7 +804,7 @@ where
 
     #[inline(always)]
     fn exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
-        let mut data = self.data.write(&self.thread_routing);
+        let mut data = self.data.write(self.thread_routing.snapshot());
         let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
             let _resp = data.dispatch_mut(o);
             if mine {
@@ -848,7 +850,7 @@ where
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
         let res = {
-            let mut data = self.data.write(&contexts.active_threads);
+            let mut data = self.data.write(contexts.active_threads);
             let f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 #[cfg(not(loom))]
                 let resp = data.dispatch_mut(o);
@@ -876,7 +878,7 @@ where
 
         // Execute outstanding operations on the shared log against this replica
         {
-            let mut data = self.data.write(&contexts.active_threads);
+            let mut data = self.data.write(contexts.active_threads);
             let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 let resp = data.dispatch_mut(o);
                 if mine {

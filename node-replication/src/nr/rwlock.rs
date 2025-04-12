@@ -150,7 +150,7 @@ where
         unsafe { WriteGuard::new(self) }
     }
 
-    pub fn write(&self, write_bitmap: &AtomicBitmap) -> WriteGuard<T> {
+    pub fn write(&self, mut snapshot: [u128; 2]) -> WriteGuard<T> {
         // First, wait until we can acquire the writer lock.
         loop {
             match self.wlock.compare_exchange_weak(
@@ -168,15 +168,22 @@ where
         // evaluates to true if each reader lock is free (i.e equal to zero).
         // We use the bitmap to determine which readers to check.
         loop {
-            let mut done = 0;
-            for i in 0..MAX_THREADS_PER_INSTANCE {
-                if write_bitmap._test_bit(i) {
-                    done += self.rlock[i].load(Ordering::Relaxed);
+            if snapshot[0] > 0 {
+                let next_gtid = snapshot[0].trailing_zeros() as usize;
+                if 0 == self.rlock[next_gtid].load(Ordering::Relaxed) {
+                    snapshot[0] &= !(1 << next_gtid);
                 }
+                continue;
             }
-            if done == 0 {
-                break;
+            if snapshot[1] > 0 {
+                let next_gtid = snapshot[1].trailing_zeros() as usize;
+                if 0 == self.rlock[128 + next_gtid].load(Ordering::Relaxed) {
+                    snapshot[1] &= !(1 << next_gtid);
+                }
+                continue;
             }
+
+            break;
         }
         unsafe { WriteGuard::new(self) }
     }
@@ -364,7 +371,7 @@ mod tests {
 
         let val = 10;
 
-        let mut guard = lock.write(&bitmap);
+        let mut guard = lock.write(bitmap.snapshot());
         *guard = val;
 
         assert_eq!(lock.wlock.load(Ordering::Relaxed), true);
@@ -392,7 +399,7 @@ mod tests {
         bitmap.set_bit(0);
 
         {
-            let mut _guard = lock.write(&bitmap);
+            let mut _guard = lock.write(bitmap.snapshot());
             assert_eq!(lock.wlock.load(Ordering::Relaxed), true);
         }
 
@@ -483,13 +490,14 @@ mod tests {
         let bitmap = AtomicBitmap::default();
         bitmap.set_bit(0);
         bitmap.set_bit(1);
+        let snapshot = bitmap.snapshot();
 
         {
-            let _g = l.write(&bitmap);
+            let _g = l.write(snapshot);
         }
 
         {
-            let _g = l.write(&bitmap);
+            let _g = l.write(snapshot);
         }
 
         {
@@ -498,7 +506,7 @@ mod tests {
         }
 
         {
-            let _g = l.write(&bitmap);
+            let _g = l.write(snapshot);
         }
     }
 
@@ -544,7 +552,7 @@ mod tests {
             let l = lock.clone();
             let bitmap = bitmap.clone();
             let child = thread::spawn(move || {
-                let mut ele = l.write(&bitmap);
+                let mut ele = l.write(bitmap.snapshot());
                 *ele += 1;
             });
             threads.push(child);
@@ -645,7 +653,7 @@ mod tests {
 
         let s = shared.clone();
         let lock_thread = thread::spawn(move || {
-            let _w = lock.write(&bitmap);
+            let _w = lock.write(bitmap.snapshot());
             let _r = lock.read(0);
             s.store(1, Ordering::SeqCst);
         });
@@ -697,7 +705,7 @@ mod tests {
         let s = shared.clone();
         let lock_thread = thread::spawn(move || {
             let _r = lock.read(0);
-            let _w = lock.write(&bitmap);
+            let _w = lock.write(bitmap.snapshot());
             s.store(1, Ordering::SeqCst);
         });
 
@@ -747,8 +755,8 @@ mod tests {
 
         let s = shared.clone();
         let lock_thread = thread::spawn(move || {
-            let _f = lock.write(&bitmap);
-            let _s = lock.write(&bitmap);
+            let _f = lock.write(bitmap.snapshot());
+            let _s = lock.write(bitmap.snapshot());
             s.store(1, Ordering::SeqCst);
         });
 

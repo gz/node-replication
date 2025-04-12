@@ -988,7 +988,7 @@ where
     pub fn context_iterator(&self, replica: &Replica<D>) -> ContextIterator<D> {
         ContextIterator {
             contexts: &self.contexts,
-            active_threads: replica.thread_routing.clone(),
+            active_threads: replica.thread_routing.snapshot(),
         }
     }
 
@@ -1053,24 +1053,22 @@ where
 #[derive(Clone)]
 pub struct ContextIterator<'a, D: Dispatch> {
     contexts: &'a Vec<Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>>,
-    active_threads: AtomicBitmap,
+    active_threads: [u128; 2],
 }
 
 impl<'a, D: Dispatch> core::iter::Iterator for ContextIterator<'a, D> {
     type Item = &'a Context<<D as Dispatch>::WriteOperation, <D as Dispatch>::Response>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let active_threads = self.active_threads.snapshot();
-
-        if active_threads[0] > 0 {
-            let next_gtid = active_threads[0].trailing_zeros() as usize;
-            self.active_threads.clear_bit(next_gtid);
+        if self.active_threads[0] > 0 {
+            let next_gtid = self.active_threads[0].trailing_zeros() as usize;
+            self.active_threads[0] &= !(1 << next_gtid);
             return Some(&self.contexts[next_gtid]);
         }
-        if active_threads[1] > 0 {
-            let next_gtid = 128 + active_threads[1].trailing_zeros() as usize;
-            self.active_threads.clear_bit(next_gtid);
-            return Some(&self.contexts[next_gtid]);
+        if self.active_threads[1] > 0 {
+            let next_gtid = self.active_threads[1].trailing_zeros() as usize;
+            self.active_threads[1] &= !(1 << next_gtid);
+            return Some(&self.contexts[128 + next_gtid]);
         }
 
         None

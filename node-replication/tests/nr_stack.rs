@@ -11,7 +11,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use nr2::nr::{Dispatch, NodeReplicated};
+use nr2::nr::{rwlock::RwLock, Dispatch, NodeReplicated};
 
 use rand::{thread_rng, Rng};
 
@@ -374,15 +374,18 @@ fn parallel_push_and_pop_test() {
 }
 
 fn bench(
-    nrstack: Arc<NodeReplicated<Stack>>,
+    nrstack: Arc<RwLock<NodeReplicated<Stack>>>,
     replica: usize,
+    tid: usize,
     nop: usize,
     barrier: Arc<Barrier>,
 ) -> (u64, u64) {
     let idx = nrstack
+        .read(tid)
         .register(replica)
         .expect("Failed to register with Replica.");
 
+    barrier.wait();
     let mut orng = thread_rng();
     let mut arng = thread_rng();
 
@@ -401,7 +404,7 @@ fn bench(
         if nop % 1000 == 0 {
             std::thread::yield_now();
         }
-        nrstack.execute_mut(ops[i], idx);
+        nrstack.read(tid).execute_mut(ops[i], idx);
     }
 
     barrier.wait();
@@ -411,27 +414,42 @@ fn bench(
 
 /// Verify that 2 replicas are equal after a set of random
 /// operations have been executed against the log.
-#[test]
-fn replicas_are_equal() {
+fn replicas_are_equal(dynrep: bool) {
     let t = 4usize;
-    let r = 2usize;
+    let r = 3usize;
     let n = 50usize;
 
     let replicas = NonZeroUsize::new(r).unwrap();
-    let nrstack_main =
-        Arc::new(NodeReplicated::<Stack>::new(replicas, |_ac| 0).expect("Can't create Ds"));
+    let nrstack_main = Arc::new(RwLock::new(
+        NodeReplicated::<Stack>::new(replicas, |_ac| 0).expect("Can't create Ds"),
+    ));
 
     let mut threads = Vec::new();
-    let barrier = Arc::new(Barrier::new(t * r));
+    let barrier = if dynrep {
+        Arc::new(Barrier::new(t * r + 1))
+    } else {
+        Arc::new(Barrier::new(t * r))
+    };
 
+    let mut tid = 0;
     for i in 0..r {
         for _j in 0..t {
             let nrstack = nrstack_main.clone();
             let o = n.clone();
             let b = barrier.clone();
-            let child = thread::spawn(move || bench(nrstack, i, o, b));
+            let child = thread::spawn(move || bench(nrstack, i, tid, o, b));
             threads.push(child);
+            tid += 1;
         }
+    }
+
+    if dynrep {
+        barrier.wait();
+        {
+            nrstack_main.write_n(r * t).remove_replica(r - 1);
+        }
+        barrier.wait();
+        barrier.wait();
     }
 
     for _i in 0..threads.len() {
@@ -449,7 +467,8 @@ fn replicas_are_equal() {
         p0.extend_from_slice(&data.storage);
     };
 
-    nrstack_main.replicas[&0].verify(&nrstack_main.log, v);
+    let locked = nrstack_main.write_n(r * t);
+    locked.replicas[&0].verify(&locked.log, v);
 
     let mut d1 = vec![];
     let mut p1 = vec![];
@@ -457,8 +476,18 @@ fn replicas_are_equal() {
         d1.extend_from_slice(&data.storage);
         p1.extend_from_slice(&data.storage);
     };
-    nrstack_main.replicas[&1].verify(&nrstack_main.log, v);
+    locked.replicas[&1].verify(&locked.log, v);
 
     assert_eq!(d0, d1, "Data-structures don't match.");
     assert_eq!(p0, p1, "Removed elements in each replica dont match.");
+}
+
+#[test]
+fn replicas_are_equal_static() {
+    replicas_are_equal(false);
+}
+
+#[test]
+fn replicas_are_equal_dynrep() {
+    replicas_are_equal(true);
 }

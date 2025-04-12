@@ -321,18 +321,22 @@ fn parallel_push_sequential_pop_test() {
 /// Many threads run in parallel, each pushing a unique increasing element into the stack.
 /// Then, many threads run in parallel, each popping an element and checking that the
 /// elements that came from a given thread are monotonically decreasing.
-#[test]
-fn parallel_push_and_pop_test() {
+fn parallel_push_and_pop_test(dynrep: bool) {
     let t = 4usize;
     let r = 2usize;
     let nop: u16 = u16::MAX;
 
     let replicas = NonZeroUsize::new(r).unwrap();
-    let nrstack_main =
-        Arc::new(NodeReplicated::<VerifyStack>::new(replicas, |_ac| 0).expect("Can't create Ds"));
+    let nrstack_main = Arc::new(RwLock::new(
+        NodeReplicated::<VerifyStack>::new(replicas, |_ac| 0).expect("Can't create Ds"),
+    ));
 
     let mut threads = Vec::new();
-    let barrier = Arc::new(Barrier::new(t * r));
+    let barrier = if dynrep {
+        Arc::new(Barrier::new(t * r + 1))
+    } else {
+        Arc::new(Barrier::new(t * r))
+    };
 
     for i in 0..r {
         for j in 0..t {
@@ -342,13 +346,20 @@ fn parallel_push_and_pop_test() {
                 let tid: u32 = (i * t + j) as u32;
                 //println!("tid = {} i={} j={}", tid, i, j);
                 let idx = nrstack
+                    .read(tid as usize)
                     .register(i)
                     .expect("Failed to register with replica.");
+
+                // 0. Dynrep phase
+                if dynrep {
+                    b.wait();
+                }
 
                 // 1. Insert phase
                 b.wait();
                 for k in 0..nop {
                     nrstack
+                        .read(tid as usize)
                         .execute_mut(OpWr::Push((k as u32) << 16 | tid), idx)
                         .unwrap();
                 }
@@ -356,12 +367,23 @@ fn parallel_push_and_pop_test() {
                 // 2. Dequeue phase, verification
                 b.wait();
                 for _i in 0..nop {
-                    nrstack.execute(OpRd::Peek, idx).unwrap();
-                    nrstack.execute_mut(OpWr::Pop, idx).unwrap();
+                    nrstack.read(tid as usize).execute(OpRd::Peek, idx).unwrap();
+                    nrstack
+                        .read(tid as usize)
+                        .execute_mut(OpWr::Pop, idx)
+                        .unwrap();
                 }
             });
             threads.push(child);
         }
+    }
+
+    if dynrep {
+        barrier.wait();
+        let removed = nrstack_main.write_n(r * t).remove_replica(r - 1).unwrap();
+        assert!(removed == r - 1);
+        barrier.wait();
+        barrier.wait();
     }
 
     for _i in 0..threads.len() {
@@ -371,6 +393,16 @@ fn parallel_push_and_pop_test() {
             .join()
             .expect("Thread didn't finish successfully.");
     }
+}
+
+#[test]
+fn parallel_push_and_pop_static_test() {
+    parallel_push_and_pop_test(false);
+}
+
+#[test]
+fn parallel_push_and_pop_dynrep_test() {
+    parallel_push_and_pop_test(true);
 }
 
 fn bench(
@@ -446,7 +478,8 @@ fn replicas_are_equal(dynrep: bool) {
     if dynrep {
         barrier.wait();
         {
-            nrstack_main.write_n(r * t).remove_replica(r - 1);
+            let removed = nrstack_main.write_n(r * t).remove_replica(r - 1).unwrap();
+            assert!(removed == r - 1);
         }
         barrier.wait();
         barrier.wait();

@@ -155,7 +155,7 @@ pub struct ThreadToken {
     ///
     /// # Note
     /// Usually this would represent e.g., the NUMA node of the thread.
-    rid: ReplicaId,
+    pub rid: ReplicaId,
     /// The registration token for this thread that we got from the replica
     /// (through [`Replica::register`]) identified by `rid`.
     rtkn: ReplicaToken,

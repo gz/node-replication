@@ -178,7 +178,7 @@ where
                 }
                 snap0 &= !(1 << next_gtid);
             }
-            if snap1 > 0 {
+            while snap1 > 0 {
                 let next_gtid = snap1.trailing_zeros() as usize;
                 if 0 == self.rlock[128 + next_gtid].load(Ordering::Relaxed) {
                     snapshot[1] &= !(1 << next_gtid);

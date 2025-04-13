@@ -149,7 +149,8 @@ where
         unsafe { WriteGuard::new(self) }
     }
 
-    pub fn write(&self, mut snapshot: [u128; 2]) -> WriteGuard<T> {
+    pub fn write(&self, orig_snapshot: [u128; 2]) -> WriteGuard<T> {
+        let mut snapshot = [orig_snapshot[0], orig_snapshot[1]];
         // First, wait until we can acquire the writer lock.
         loop {
             match self.wlock.compare_exchange_weak(

@@ -530,9 +530,10 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
         combiner_lock: CombinerLock<'lock, D>,
+        current_affinity: usize,
     ) -> Result<(), ReplicaError<D>> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.combine(slog, contexts, combiner_lock)
+        self.combine(slog, contexts, combiner_lock, current_affinity)
     }
 
     /// Executes an immutable operation against this replica and returns a
@@ -650,7 +651,7 @@ where
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
         if !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            if let Err(e) = self.combine(slog, contexts.clone(), combiner_lock) {
+            if let Err(e) = self.combine(slog, contexts.clone(), combiner_lock, idx.rid) {
                 return Err((e, op));
             }
         }
@@ -766,7 +767,7 @@ where
         // Try to become the combiner here. If this fails, then simply return.
         if let Some(_combiner_lock) = self.acquire_combiner_lock(current_affinity) {
             // Successfully became the combiner; perform one round of flat combining.
-            self.exec(slog);
+            self.exec(slog, current_affinity);
         }
     }
 
@@ -819,7 +820,7 @@ where
         // Try to become the combiner here. If this fails, then simply return.
         if let Some(combiner_lock) = self.acquire_combiner_lock(current_affinity) {
             // Successfully became the combiner; perform one round of flat combining.
-            self.combine(slog, contexts, combiner_lock)?;
+            self.combine(slog, contexts, combiner_lock, current_affinity)?;
             Ok(())
         } else {
             #[cfg(loom)]
@@ -829,8 +830,13 @@ where
     }
 
     #[inline(always)]
-    fn exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>) {
+    fn exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>, current_affinity: usize) {
         let mut data = self.data.write(self.thread_routing.snapshot());
+        let _aftkn = if current_affinity != self.replica_id {
+            Some(self.affinity_mngr.switch(self.replica_id))
+        } else {
+            None
+        };
         let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
             let _resp = data.dispatch_mut(o);
             if mine {
@@ -863,6 +869,7 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
         combiner_lock: CombinerLock<'r, D>,
+        current_affinity: usize,
     ) -> Result<(), ReplicaError<D>> {
         //logging::error!("combine() num_registered_threads={num_registered_threads}");
         let mut results = self.result.borrow_mut();
@@ -877,6 +884,11 @@ where
         // in here because operations on the log might need to be consumed for GC.
         let res = {
             let mut data = self.data.write(contexts.active_threads);
+            let _aftkn = if current_affinity != self.replica_id {
+                Some(self.affinity_mngr.switch(self.replica_id))
+            } else {
+                None
+            };
             let f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 #[cfg(not(loom))]
                 let resp = data.dispatch_mut(o);
@@ -905,6 +917,11 @@ where
         // Execute outstanding operations on the shared log against this replica
         {
             let mut data = self.data.write(contexts.active_threads);
+            let _aftkn = if current_affinity != self.replica_id {
+                Some(self.affinity_mngr.switch(self.replica_id))
+            } else {
+                None
+            };
             let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 let resp = data.dispatch_mut(o);
                 if mine {

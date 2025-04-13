@@ -662,7 +662,7 @@ where
         if let Some(combiner_lock) = cl {
             // We expect to have already enqueued the op (it's a re-try since have the combiner lock),
             // so technically its not needed to supply it again (but we currently do it anyways...)
-            r.execute_mut_locked(&self.log, contexts, combiner_lock)?;
+            r.execute_mut_locked(&self.log, contexts, combiner_lock, tkn.rid)?;
         } else {
             r.execute_mut(&self.log, contexts, tkn.rid)?;
         }

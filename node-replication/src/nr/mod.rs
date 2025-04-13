@@ -449,6 +449,13 @@ where
     }
 
     fn reroute_threads(&mut self) {
+        let mut total_threads = 0;
+        for (_rid, r) in self.replicas.iter() {
+            let snapshot = r.thread_routing.snapshot();
+            total_threads += snapshot[0].count_ones();
+            total_threads += snapshot[1].count_ones();
+        }
+
         for (_rid, r) in self.replicas.iter() {
             for gtid in 0..MAX_THREADS_PER_INSTANCE {
                 if r.thread_routing._test_bit(gtid) {
@@ -467,6 +474,14 @@ where
                 }
             }
         }
+
+        let mut total_threads_after = 0;
+        for (_rid, r) in self.replicas.iter() {
+            let snapshot = r.thread_routing.snapshot();
+            total_threads_after += snapshot[0].count_ones();
+            total_threads_after += snapshot[1].count_ones();
+        }
+        assert_eq!(total_threads, total_threads_after);
     }
 
     /// Adds a new replica to the NodeReplicated. It returns the index of the added replica within

@@ -998,7 +998,7 @@ where
         replica: &Replica<D>,
     ) -> <D as Dispatch>::Response {
         let mut iter = 0;
-        let interval = 1 << 24;
+        let interval = 1 << 29;
 
         // Keep trying to retrieve a response from the thread context. After trying `interval`
         // times with no luck, try to perform flat combining to make some progress.

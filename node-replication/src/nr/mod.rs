@@ -264,7 +264,7 @@ impl AffinityManager {
 
 /// A token that is in charge of orchestrating memory affinity changes for a
 /// thread.
-struct AffinityToken {
+pub struct AffinityToken {
     af_chg_fn: Arc<dyn Fn(AffinityChange) -> usize>,
     old: usize,
 }
@@ -777,7 +777,8 @@ where
                     debug_assert_ne!(ridx, tkn.rid);
                     //warn!("execute_mut ResolveOp::Sync {}", ridx);
                     if let Some(r) = self.replicas.get(&ridx) {
-                        r.try_sync(&self.log, tkn.rid)
+                        let maybe_tkn = &mut None;
+                        r.try_sync(&self.log, tkn.rid, maybe_tkn);
                     } else {
                         panic!("Replica not found??");
                     }
@@ -892,7 +893,8 @@ where
                     // Holds trivially because of all the other asserts in this function
                     debug_assert_ne!(ridx, tkn.rid);
                     if let Some(r) = self.replicas.get(&ridx) {
-                        r.try_sync(&self.log, tkn.rid)
+                        let maybe_token = &mut None;
+                        r.try_sync(&self.log, tkn.rid, maybe_token);
                     } else {
                         panic!("Replica not found??");
                     }
@@ -999,6 +1001,7 @@ where
     ) -> <D as Dispatch>::Response {
         let mut iter = 0;
         let interval = 1 << 29;
+        let maybe_token = &mut None;
 
         // Keep trying to retrieve a response from the thread context. After trying `interval`
         // times with no luck, try to perform flat combining to make some progress.
@@ -1019,7 +1022,7 @@ where
                     tkn,
                     &self.contexts[tkn.gtid]
                 );
-                let _r: () = self.try_combine(replica, tkn.rid).unwrap();
+                let _r: () = self.try_combine(replica, tkn.rid, maybe_token).unwrap();
                 iter = 0;
             }
         }
@@ -1031,9 +1034,10 @@ where
         &'a self,
         r: &'a Replica<D>,
         current_affinity: usize,
+        maybe_token: &mut Option<AffinityToken>,
     ) -> Result<(), ReplicaError<D>> {
         let contexts = self.context_iterator(r);
-        r.try_combine(&self.log, contexts, current_affinity)
+        r.try_combine(&self.log, contexts, current_affinity, maybe_token)
     }
 
     #[doc(hidden)]
@@ -1393,7 +1397,9 @@ mod test {
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
 
         assert!(async_ds.make_pending(121, ttkn_a.gtid));
-        assert!(async_ds.try_combine(&async_ds.replicas[&0], 0).is_ok());
+        assert!(async_ds
+            .try_combine(&async_ds.replicas[&0], 0, &mut None)
+            .is_ok());
 
         assert_eq!(async_ds.replicas[&0].combiner.load(Ordering::SeqCst), 0);
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 1);
@@ -1410,7 +1416,9 @@ mod test {
 
         async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
         assert!(async_ds.make_pending(121, ttkn_a.gtid));
-        assert!(async_ds.try_combine(&async_ds.replicas[&0], 0).is_ok());
+        assert!(async_ds
+            .try_combine(&async_ds.replicas[&0], 0, &mut None)
+            .is_ok());
 
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 1);
         assert_eq!(async_ds.contexts[0].res(), Some(Ok(107)));
@@ -1427,7 +1435,9 @@ mod test {
         async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
         async_ds.replicas[&0].combiner.store(8, Ordering::SeqCst);
         assert!(async_ds.make_pending(121, ttkn_a.gtid));
-        assert!(async_ds.try_combine(&async_ds.replicas[&0], 0).is_ok());
+        assert!(async_ds
+            .try_combine(&async_ds.replicas[&0], 0, &mut None)
+            .is_ok());
 
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 0);
         assert_eq!(async_ds.contexts[0].res(), None);

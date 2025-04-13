@@ -512,7 +512,8 @@ where
         current_thread: usize,
     ) -> Result<(), ReplicaError<D>> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.try_combine(slog, contexts, current_thread)
+        let maybe_token = &mut None;
+        self.try_combine(slog, contexts, current_thread, maybe_token)
     }
 
     /// See [`Replica::execute_mut()`] for a general description of this method.
@@ -533,7 +534,11 @@ where
         current_affinity: usize,
     ) -> Result<(), ReplicaError<D>> {
         // Enqueue the operation onto the thread local batch and then try to flat combine.
-        self.combine(slog, contexts, combiner_lock, current_affinity)
+        let maybe_token = &mut None;
+        match self.combine(slog, contexts, combiner_lock, current_affinity, maybe_token) {
+            Err(e) => Err(e),
+            Ok(_cl) => Ok(()),
+        }
     }
 
     /// Executes an immutable operation against this replica and returns a
@@ -613,19 +618,17 @@ where
         idx: ThreadToken,
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
-        // TODO(erika): change reader affinity? Change outside of loop?
-
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
+        let maybe_token = &mut None;
         while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            if let Err(e) = self.try_combine(slog, contexts.clone(), idx.rid) {
+            if let Err(e) = self.try_combine(slog, contexts.clone(), idx.rid, maybe_token) {
                 return Err((e, op));
             }
             spin_loop();
         }
-
-        return Ok(self.data.read(idx.gtid).dispatch(op));
+        Ok(self.data.read(idx.gtid).dispatch(op))
     }
 
     /// See [`Replica::execute()`] for a general description of this method.
@@ -650,12 +653,17 @@ where
         // We can perform the read only if our replica is synced up against
         // the shared log. If it isn't, then try to combine until it is synced up.
         let ctail = slog.get_ctail();
-        if !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            if let Err(e) = self.combine(slog, contexts.clone(), combiner_lock, idx.rid) {
-                return Err((e, op));
+        let maybe_token = &mut None;
+        let mut my_cl = combiner_lock;
+        while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
+            match self.combine(slog, contexts.clone(), my_cl, idx.rid, maybe_token) {
+                Err(e) => return Err((e, op)),
+                Ok(cl) => my_cl = cl,
             }
         }
-        Ok(self.data.read(idx.gtid).dispatch(op))
+        drop(my_cl);
+        let ret = Ok(self.data.read(idx.gtid).dispatch(op));
+        ret
     }
 
     /*
@@ -743,8 +751,9 @@ where
     /// - [`Replica::try_sync`]
     pub fn sync(&self, slog: &Log<<D as Dispatch>::WriteOperation>, current_affinity: usize) {
         let ctail = slog.get_ctail();
+        let maybe_token = &mut None;
         while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            self.try_sync(slog, current_affinity);
+            self.try_sync(slog, current_affinity, maybe_token);
             spin_loop();
         }
     }
@@ -763,11 +772,12 @@ where
         &self,
         slog: &Log<<D as Dispatch>::WriteOperation>,
         current_affinity: usize,
+        maybe_token: &mut Option<AffinityToken>,
     ) {
         // Try to become the combiner here. If this fails, then simply return.
         if let Some(_combiner_lock) = self.acquire_combiner_lock(current_affinity) {
             // Successfully became the combiner; perform one round of flat combining.
-            self.exec(slog, current_affinity);
+            self.exec(slog, current_affinity, maybe_token);
         }
     }
 
@@ -782,18 +792,7 @@ where
                 loom::thread::yield_now();
                 return None;
             }
-        }
-
-        if current_affinity != self.replica_id {
-            // Be more patient if not local.
-            for _ in 0..4 {
-                if self.combiner.load(Ordering::Relaxed) != 0 {
-                    #[cfg(loom)]
-                    loom::thread::yield_now();
-                    return None;
-                }
-                spin_loop();
-            }
+            spin_loop();
         }
 
         if self
@@ -816,11 +815,12 @@ where
         slog: &Log<<D as Dispatch>::WriteOperation>,
         contexts: ContextIterator<D>,
         current_affinity: usize,
+        maybe_token: &mut Option<AffinityToken>,
     ) -> Result<(), ReplicaError<D>> {
         // Try to become the combiner here. If this fails, then simply return.
         if let Some(combiner_lock) = self.acquire_combiner_lock(current_affinity) {
             // Successfully became the combiner; perform one round of flat combining.
-            self.combine(slog, contexts, combiner_lock, current_affinity)?;
+            self.combine(slog, contexts, combiner_lock, current_affinity, maybe_token)?;
             Ok(())
         } else {
             #[cfg(loom)]
@@ -830,13 +830,17 @@ where
     }
 
     #[inline(always)]
-    fn exec(&self, slog: &Log<<D as Dispatch>::WriteOperation>, current_affinity: usize) {
+    fn exec(
+        &self,
+        slog: &Log<<D as Dispatch>::WriteOperation>,
+        current_affinity: usize,
+        maybe_token: &mut Option<AffinityToken>,
+    ) {
+        if current_affinity != self.replica_id && maybe_token.is_none() {
+            *maybe_token = Some(self.affinity_mngr.switch(self.replica_id));
+        }
         let mut data = self.data.write(self.thread_routing.snapshot());
-        let _aftkn = if current_affinity != self.replica_id {
-            Some(self.affinity_mngr.switch(self.replica_id))
-        } else {
-            None
-        };
+
         let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
             let _resp = data.dispatch_mut(o);
             if mine {
@@ -870,7 +874,8 @@ where
         contexts: ContextIterator<D>,
         combiner_lock: CombinerLock<'r, D>,
         current_affinity: usize,
-    ) -> Result<(), ReplicaError<D>> {
+        maybe_token: &mut Option<AffinityToken>,
+    ) -> Result<CombinerLock<'r, D>, ReplicaError<D>> {
         //logging::error!("combine() num_registered_threads={num_registered_threads}");
         let mut results = self.result.borrow_mut();
         let mut buffer = self.buffer.borrow_mut();
@@ -882,24 +887,18 @@ where
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
+        if current_affinity != self.replica_id && maybe_token.is_none() {
+            *maybe_token = Some(self.affinity_mngr.switch(self.replica_id));
+        }
         let res = {
-            let mut data = self.data.write(contexts.active_threads);
-            let _aftkn = if current_affinity != self.replica_id {
-                Some(self.affinity_mngr.switch(self.replica_id))
-            } else {
-                None
-            };
             let f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
-                #[cfg(not(loom))]
-                let resp = data.dispatch_mut(o);
-                #[cfg(loom)]
-                let resp = data.dispatch_mut(o);
+                let resp = self.data.write(contexts.active_threads).dispatch_mut(o);
                 if mine {
                     results.push(resp);
                 }
             };
             match slog.append(&buffer, &self.log_tkn, f) {
-                Ok(None) => Ok(()),
+                Ok(None) => Ok(combiner_lock),
                 Ok(Some(r)) => {
                     // We inserted the entries (and can apply them below), but
                     // we want to also notify about the slow `r` so it can be
@@ -917,11 +916,6 @@ where
         // Execute outstanding operations on the shared log against this replica
         {
             let mut data = self.data.write(contexts.active_threads);
-            let _aftkn = if current_affinity != self.replica_id {
-                Some(self.affinity_mngr.switch(self.replica_id))
-            } else {
-                None
-            };
             let mut f = |o: <D as Dispatch>::WriteOperation, mine: bool| {
                 let resp = data.dispatch_mut(o);
                 if mine {

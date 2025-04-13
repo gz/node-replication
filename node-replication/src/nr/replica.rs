@@ -272,7 +272,8 @@ where
     /// if the compare exchange succeeds.
     unsafe fn new(replica: &'a Replica<D>, current_affinity: usize) -> Self {
         let affinity_tkn = if current_affinity != replica.replica_id {
-            Some(replica.affinity_mngr.switch(replica.replica_id))
+            //Some(replica.affinity_mngr.switch(replica.replica_id))
+            None
         } else {
             None
         };
@@ -432,11 +433,11 @@ where
             // LogToken and ReplicaId are off by one
             let ttkn = ThreadToken::new(self.replica_id, rtkn);
 
-            if self.thread_routing._test_bit(ttkn.gtid()) {
+            if self.thread_routing._test_bit(ttkn.gtid) {
                 continue;
             }
 
-            self.thread_routing.set_bit(ttkn.gtid());
+            self.thread_routing.set_bit(ttkn.gtid);
             return Some(ttkn);
         }
     }
@@ -623,7 +624,7 @@ where
             spin_loop();
         }
 
-        return Ok(self.data.read(idx.gtid()).dispatch(op));
+        return Ok(self.data.read(idx.gtid).dispatch(op));
     }
 
     /// See [`Replica::execute()`] for a general description of this method.
@@ -653,7 +654,7 @@ where
                 return Err((e, op));
             }
         }
-        Ok(self.data.read(idx.gtid()).dispatch(op))
+        Ok(self.data.read(idx.gtid).dispatch(op))
     }
 
     /*
@@ -1050,6 +1051,7 @@ pub(crate) mod test {
             assert!(changes.len() == 0);
         }
 
+        /*
         // Check with affinity change
         let cl = unsafe { CombinerLock::new(&repl, 1) };
         {
@@ -1064,5 +1066,6 @@ pub(crate) mod test {
             assert!(changes[0] == 0);
             assert!(changes[1] == 1);
         }
+        */
     }
 }

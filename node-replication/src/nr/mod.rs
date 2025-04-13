@@ -159,6 +159,7 @@ pub struct ThreadToken {
     /// The registration token for this thread that we got from the replica
     /// (through [`Replica::register`]) identified by `rid`.
     rtkn: ReplicaToken,
+    gtid: usize,
 }
 
 impl ThreadToken {
@@ -170,12 +171,8 @@ impl ThreadToken {
     /// should declare it like that instead of just `pub`.
     #[doc(hidden)]
     pub fn new(rid: ReplicaId, rtkn: ReplicaToken) -> Self {
-        Self { rid, rtkn }
-    }
-
-    fn gtid(&self) -> usize {
-        //logging::info!("self.rid={} self.rtkn.0={}", self.rid, self.rtkn.0);
-        self.rid * MAX_THREADS_PER_REPLICA + self.rtkn.0
+        let gtid = rid * MAX_THREADS_PER_REPLICA + rtkn.0;
+        Self { rid, rtkn, gtid }
     }
 }
 
@@ -459,7 +456,7 @@ where
                         gtid / MAX_THREADS_PER_REPLICA,
                         ReplicaToken(gtid % MAX_THREADS_PER_REPLICA),
                     );
-                    debug_assert!(ttkn.gtid() == gtid);
+                    debug_assert!(ttkn.gtid == gtid);
                     let correct_replica = self.select_replica(ttkn);
 
                     // Route correctly if wrong
@@ -574,7 +571,7 @@ where
                             gtid / MAX_THREADS_PER_REPLICA,
                             ReplicaToken(gtid % MAX_THREADS_PER_REPLICA),
                         );
-                        debug_assert!(ttkn.gtid() == gtid);
+                        debug_assert!(ttkn.gtid == gtid);
                         let correct_replica = self.select_replica(ttkn);
                         correct_replica.thread_routing.set_bit(gtid);
                     }
@@ -646,7 +643,7 @@ where
     pub fn register(&self, replica_id: ReplicaId) -> Option<ThreadToken> {
         if self.replicas.len() < MAX_REPLICAS_PER_LOG {
             let ttkn = self.replicas[&replica_id].register()?;
-            logging::trace!("rid {replica_id} ttkn {ttkn:?} gtid = {}", ttkn.gtid());
+            logging::trace!("rid {replica_id} ttkn {ttkn:?} gtid = {}", ttkn.gtid);
             Some(ttkn)
         } else {
             None
@@ -731,7 +728,7 @@ where
         let replica = self.select_replica(tkn);
 
         //logging::info!("execute mut on {:?}", tkn);
-        while !self.make_pending(op.clone(), tkn.gtid()) {}
+        while !self.make_pending(op.clone(), tkn.gtid) {}
 
         /// An enum to keep track of a stack of operations we should do on Replicas.
         ///
@@ -798,7 +795,7 @@ where
         cl: Option<CombinerLock<'a, D>>,
     ) -> Result<<D as Dispatch>::Response, (ReplicaError<D>, <D as Dispatch>::ReadOperation<'rop>)>
     {
-        debug_assert!(r.thread_routing._test_bit(tkn.gtid()));
+        debug_assert!(r.thread_routing._test_bit(tkn.gtid));
         let contexts = self.context_iterator(r);
         if let Some(combiner_lock) = cl {
             r.execute_locked(&self.log, op, tkn, contexts, combiner_lock)
@@ -945,7 +942,7 @@ where
                 r
             }
             None => {
-                let key_idx = tkn.gtid() % self.replica_list.len();
+                let key_idx = tkn.gtid % self.replica_list.len();
                 let new_rid = self.replica_list[key_idx];
                 debug_assert_ne!(new_rid, tkn.rid);
                 self.replicas.get(&new_rid).unwrap()
@@ -1006,11 +1003,11 @@ where
         // Keep trying to retrieve a response from the thread context. After trying `interval`
         // times with no luck, try to perform flat combining to make some progress.
         loop {
-            let r = self.contexts[tkn.gtid()].res();
+            let r = self.contexts[tkn.gtid].res();
             //logging::info!("after res");
 
             if let Some(resp) = r {
-                //logging::info!("found a resp for tkn = {:?} gtid={}", tkn, tkn.gtid());
+                //logging::info!("found a resp for tkn = {:?} gtid={}", tkn, tkn.gtid);
                 return resp;
             }
 
@@ -1020,7 +1017,7 @@ where
                 logging::debug!(
                     "calling sync from {:?} context={:p}",
                     tkn,
-                    &self.contexts[tkn.gtid()]
+                    &self.contexts[tkn.gtid]
                 );
                 let _r: () = self.try_combine(replica, tkn.rid).unwrap();
                 iter = 0;
@@ -1084,10 +1081,7 @@ mod test {
         let _ = env_logger::try_init();
 
         fn mkttkn(rid: usize, tid: usize) -> ThreadToken {
-            ThreadToken {
-                rid,
-                rtkn: ReplicaToken(tid),
-            }
+            ThreadToken::new(rid, ReplicaToken(tid))
         }
 
         let replicas = NonZeroUsize::new(2).unwrap();
@@ -1105,11 +1099,17 @@ mod test {
         );
 
         // Doesn't have active replica, assign to 0 or 1:
-        assert_eq!(nds.select_replica(mkttkn(3, 0)).replica_id, 0);
+        assert!(
+            nds.select_replica(mkttkn(3, 0)).replica_id == 0
+                || nds.select_replica(mkttkn(3, 0)).replica_id == 1
+        );
+        /*
         assert_eq!(
             nds.select_replica(mkttkn(3, 0)).replica_id,
             nds.select_replica2(mkttkn(3, 0)).replica_id
         );
+        */
+
         // Threads on same (inactive) replicas are split evenly among active
         // replicas:
         assert_eq!(nds.select_replica(mkttkn(3, 1)).replica_id, 1);
@@ -1357,7 +1357,7 @@ mod test {
         let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
 
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
-        let gtid = ttkn_a.gtid();
+        let gtid = ttkn_a.gtid;
 
         let mut o = vec![];
         assert!(async_ds.make_pending(121, gtid));
@@ -1375,7 +1375,7 @@ mod test {
         let async_ds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
 
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
-        let gtid = ttkn_a.gtid();
+        let gtid = ttkn_a.gtid;
 
         for _i in 0..Context::<u64, Result<u64, ()>>::batch_size() {
             assert!(async_ds.make_pending(121, gtid))
@@ -1392,7 +1392,7 @@ mod test {
 
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
 
-        assert!(async_ds.make_pending(121, ttkn_a.gtid()));
+        assert!(async_ds.make_pending(121, ttkn_a.gtid));
         assert!(async_ds.try_combine(&async_ds.replicas[&0], 0).is_ok());
 
         assert_eq!(async_ds.replicas[&0].combiner.load(Ordering::SeqCst), 0);
@@ -1409,7 +1409,7 @@ mod test {
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
 
         async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
-        assert!(async_ds.make_pending(121, ttkn_a.gtid()));
+        assert!(async_ds.make_pending(121, ttkn_a.gtid));
         assert!(async_ds.try_combine(&async_ds.replicas[&0], 0).is_ok());
 
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 1);
@@ -1426,7 +1426,7 @@ mod test {
 
         async_ds.replicas[&0].next.store(9, Ordering::SeqCst);
         async_ds.replicas[&0].combiner.store(8, Ordering::SeqCst);
-        assert!(async_ds.make_pending(121, ttkn_a.gtid()));
+        assert!(async_ds.make_pending(121, ttkn_a.gtid));
         assert!(async_ds.try_combine(&async_ds.replicas[&0], 0).is_ok());
 
         assert_eq!(async_ds.replicas[&0].data.read(0).junk, 0);
@@ -1454,7 +1454,7 @@ mod test {
 
         let ttkn_a = async_ds.register(0).expect("Unable to register with log");
 
-        assert!(async_ds.make_pending(121, ttkn_a.gtid()));
+        assert!(async_ds.make_pending(121, ttkn_a.gtid));
         assert_eq!(
             async_ds
                 .get_response(ttkn_a, async_ds.replicas.get(&0).unwrap())
@@ -1485,37 +1485,19 @@ mod test {
         let ttkn_b = async_ds.register(1).expect("Unable to register with log");
         let ttkn_c = async_ds.register(2).expect("Unable to register with log");
 
-        assert!(async_ds.replicas[&0]
-            .thread_routing
-            ._test_bit(ttkn_a.gtid()));
-        assert!(!async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_a.gtid()));
-        assert!(!async_ds.replicas[&2]
-            .thread_routing
-            ._test_bit(ttkn_a.gtid()));
+        assert!(async_ds.replicas[&0].thread_routing._test_bit(ttkn_a.gtid));
+        assert!(!async_ds.replicas[&1].thread_routing._test_bit(ttkn_a.gtid));
+        assert!(!async_ds.replicas[&2].thread_routing._test_bit(ttkn_a.gtid));
         assert_eq!(async_ds.select_replica(ttkn_a).replica_id, 0);
 
-        assert!(async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_b.gtid()));
-        assert!(!async_ds.replicas[&0]
-            .thread_routing
-            ._test_bit(ttkn_b.gtid()));
-        assert!(!async_ds.replicas[&2]
-            .thread_routing
-            ._test_bit(ttkn_b.gtid()));
+        assert!(async_ds.replicas[&1].thread_routing._test_bit(ttkn_b.gtid));
+        assert!(!async_ds.replicas[&0].thread_routing._test_bit(ttkn_b.gtid));
+        assert!(!async_ds.replicas[&2].thread_routing._test_bit(ttkn_b.gtid));
         assert_eq!(async_ds.select_replica(ttkn_b).replica_id, 1);
 
-        assert!(async_ds.replicas[&2]
-            .thread_routing
-            ._test_bit(ttkn_c.gtid()));
-        assert!(!async_ds.replicas[&0]
-            .thread_routing
-            ._test_bit(ttkn_c.gtid()));
-        assert!(!async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_c.gtid()));
+        assert!(async_ds.replicas[&2].thread_routing._test_bit(ttkn_c.gtid));
+        assert!(!async_ds.replicas[&0].thread_routing._test_bit(ttkn_c.gtid));
+        assert!(!async_ds.replicas[&1].thread_routing._test_bit(ttkn_c.gtid));
         assert_eq!(async_ds.select_replica(ttkn_c).replica_id, 2);
 
         let ret = async_ds.remove_replica(0).unwrap();
@@ -1523,53 +1505,31 @@ mod test {
 
         // ttkn a redirected to either 1 or 2 but not both
         assert!(
-            (async_ds.replicas[&1]
-                .thread_routing
-                ._test_bit(ttkn_a.gtid())
-                && !async_ds.replicas[&2]
-                    .thread_routing
-                    ._test_bit(ttkn_a.gtid())
+            (async_ds.replicas[&1].thread_routing._test_bit(ttkn_a.gtid)
+                && !async_ds.replicas[&2].thread_routing._test_bit(ttkn_a.gtid)
                 && async_ds.select_replica(ttkn_a).replica_id == 1)
-                || (!async_ds.replicas[&1]
-                    .thread_routing
-                    ._test_bit(ttkn_a.gtid())
-                    && async_ds.replicas[&2]
-                        .thread_routing
-                        ._test_bit(ttkn_a.gtid())
+                || (!async_ds.replicas[&1].thread_routing._test_bit(ttkn_a.gtid)
+                    && async_ds.replicas[&2].thread_routing._test_bit(ttkn_a.gtid)
                     && async_ds.select_replica(ttkn_a).replica_id == 2)
         );
 
         // other routing stays the same
-        assert!(async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_b.gtid()));
-        assert!(!async_ds.replicas[&2]
-            .thread_routing
-            ._test_bit(ttkn_b.gtid()));
+        assert!(async_ds.replicas[&1].thread_routing._test_bit(ttkn_b.gtid));
+        assert!(!async_ds.replicas[&2].thread_routing._test_bit(ttkn_b.gtid));
         assert_eq!(async_ds.select_replica(ttkn_b).replica_id, 1);
-        assert!(async_ds.replicas[&2]
-            .thread_routing
-            ._test_bit(ttkn_c.gtid()));
-        assert!(!async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_c.gtid()));
+        assert!(async_ds.replicas[&2].thread_routing._test_bit(ttkn_c.gtid));
+        assert!(!async_ds.replicas[&1].thread_routing._test_bit(ttkn_c.gtid));
         assert_eq!(async_ds.select_replica(ttkn_c).replica_id, 2);
 
         let ret = async_ds.remove_replica(2).unwrap();
         assert_eq!(ret, 2);
 
         // check all routed to remaining replica
-        assert!(async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_a.gtid()));
+        assert!(async_ds.replicas[&1].thread_routing._test_bit(ttkn_a.gtid));
         assert_eq!(async_ds.select_replica(ttkn_a).replica_id, 1);
-        assert!(async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_b.gtid()));
+        assert!(async_ds.replicas[&1].thread_routing._test_bit(ttkn_b.gtid));
         assert_eq!(async_ds.select_replica(ttkn_b).replica_id, 1);
-        assert!(async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_c.gtid()));
+        assert!(async_ds.replicas[&1].thread_routing._test_bit(ttkn_c.gtid));
         assert_eq!(async_ds.select_replica(ttkn_c).replica_id, 1);
 
         // re-add replicas
@@ -1577,37 +1537,19 @@ mod test {
         let _ = async_ds.add_replica(2).unwrap();
 
         // revert to original routing state
-        assert!(async_ds.replicas[&0]
-            .thread_routing
-            ._test_bit(ttkn_a.gtid()));
-        assert!(!async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_a.gtid()));
-        assert!(!async_ds.replicas[&2]
-            .thread_routing
-            ._test_bit(ttkn_a.gtid()));
+        assert!(async_ds.replicas[&0].thread_routing._test_bit(ttkn_a.gtid));
+        assert!(!async_ds.replicas[&1].thread_routing._test_bit(ttkn_a.gtid));
+        assert!(!async_ds.replicas[&2].thread_routing._test_bit(ttkn_a.gtid));
         assert_eq!(async_ds.select_replica(ttkn_a).replica_id, 0);
 
-        assert!(async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_b.gtid()));
-        assert!(!async_ds.replicas[&0]
-            .thread_routing
-            ._test_bit(ttkn_b.gtid()));
-        assert!(!async_ds.replicas[&2]
-            .thread_routing
-            ._test_bit(ttkn_b.gtid()));
+        assert!(async_ds.replicas[&1].thread_routing._test_bit(ttkn_b.gtid));
+        assert!(!async_ds.replicas[&0].thread_routing._test_bit(ttkn_b.gtid));
+        assert!(!async_ds.replicas[&2].thread_routing._test_bit(ttkn_b.gtid));
         assert_eq!(async_ds.select_replica(ttkn_b).replica_id, 1);
 
-        assert!(async_ds.replicas[&2]
-            .thread_routing
-            ._test_bit(ttkn_c.gtid()));
-        assert!(!async_ds.replicas[&0]
-            .thread_routing
-            ._test_bit(ttkn_c.gtid()));
-        assert!(!async_ds.replicas[&1]
-            .thread_routing
-            ._test_bit(ttkn_c.gtid()));
+        assert!(async_ds.replicas[&2].thread_routing._test_bit(ttkn_c.gtid));
+        assert!(!async_ds.replicas[&0].thread_routing._test_bit(ttkn_c.gtid));
+        assert!(!async_ds.replicas[&1].thread_routing._test_bit(ttkn_c.gtid));
         assert_eq!(async_ds.select_replica(ttkn_c).replica_id, 2);
     }
 

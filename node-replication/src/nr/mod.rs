@@ -463,7 +463,7 @@ where
                     let correct_replica = self.select_replica(ttkn);
 
                     // Route correctly if wrong
-                    if correct_replica.replica_id() != r.replica_id() {
+                    if correct_replica.replica_id != r.replica_id {
                         r.thread_routing.clear_bit(gtid);
                         correct_replica.thread_routing.set_bit(gtid);
                     }
@@ -941,7 +941,7 @@ where
     fn select_replica(&self, tkn: ThreadToken) -> &Replica<D> {
         match self.replicas.get(&tkn.rid) {
             Some(r) => {
-                debug_assert!(tkn.rid == r.replica_id());
+                debug_assert!(tkn.rid == r.replica_id);
                 r
             }
             None => {
@@ -1093,44 +1093,44 @@ mod test {
         let replicas = NonZeroUsize::new(2).unwrap();
         let nds = NodeReplicated::<Data>::new(replicas, |_ac| 0).expect("Can't create Ds");
 
-        assert_eq!(nds.select_replica(mkttkn(0, 0)).replica_id(), 0);
+        assert_eq!(nds.select_replica(mkttkn(0, 0)).replica_id, 0);
         assert_eq!(
-            nds.select_replica(mkttkn(0, 0)).replica_id(),
-            nds.select_replica2(mkttkn(0, 0)).replica_id()
+            nds.select_replica(mkttkn(0, 0)).replica_id,
+            nds.select_replica2(mkttkn(0, 0)).replica_id
         );
-        assert_eq!(nds.select_replica(mkttkn(1, 1)).replica_id(), 1);
+        assert_eq!(nds.select_replica(mkttkn(1, 1)).replica_id, 1);
         assert_eq!(
-            nds.select_replica(mkttkn(1, 1)).replica_id(),
-            nds.select_replica2(mkttkn(1, 1)).replica_id()
+            nds.select_replica(mkttkn(1, 1)).replica_id,
+            nds.select_replica2(mkttkn(1, 1)).replica_id
         );
 
         // Doesn't have active replica, assign to 0 or 1:
-        assert_eq!(nds.select_replica(mkttkn(3, 0)).replica_id(), 0);
+        assert_eq!(nds.select_replica(mkttkn(3, 0)).replica_id, 0);
         assert_eq!(
-            nds.select_replica(mkttkn(3, 0)).replica_id(),
-            nds.select_replica2(mkttkn(3, 0)).replica_id()
+            nds.select_replica(mkttkn(3, 0)).replica_id,
+            nds.select_replica2(mkttkn(3, 0)).replica_id
         );
         // Threads on same (inactive) replicas are split evenly among active
         // replicas:
-        assert_eq!(nds.select_replica(mkttkn(3, 1)).replica_id(), 1);
+        assert_eq!(nds.select_replica(mkttkn(3, 1)).replica_id, 1);
         assert_eq!(
-            nds.select_replica(mkttkn(3, 1)).replica_id(),
-            nds.select_replica2(mkttkn(3, 1)).replica_id()
+            nds.select_replica(mkttkn(3, 1)).replica_id,
+            nds.select_replica2(mkttkn(3, 1)).replica_id
         );
-        assert_eq!(nds.select_replica(mkttkn(3, 2)).replica_id(), 0);
+        assert_eq!(nds.select_replica(mkttkn(3, 2)).replica_id, 0);
         assert_eq!(
-            nds.select_replica(mkttkn(3, 2)).replica_id(),
-            nds.select_replica2(mkttkn(3, 2)).replica_id()
+            nds.select_replica(mkttkn(3, 2)).replica_id,
+            nds.select_replica2(mkttkn(3, 2)).replica_id
         );
-        assert_eq!(nds.select_replica(mkttkn(4, 0)).replica_id(), 0);
+        assert_eq!(nds.select_replica(mkttkn(4, 0)).replica_id, 0);
         assert_eq!(
-            nds.select_replica(mkttkn(4, 0)).replica_id(),
-            nds.select_replica2(mkttkn(4, 0)).replica_id()
+            nds.select_replica(mkttkn(4, 0)).replica_id,
+            nds.select_replica2(mkttkn(4, 0)).replica_id
         );
-        assert_eq!(nds.select_replica(mkttkn(4, 1)).replica_id(), 1);
+        assert_eq!(nds.select_replica(mkttkn(4, 1)).replica_id, 1);
         assert_eq!(
-            nds.select_replica(mkttkn(4, 1)).replica_id(),
-            nds.select_replica2(mkttkn(4, 1)).replica_id()
+            nds.select_replica(mkttkn(4, 1)).replica_id,
+            nds.select_replica2(mkttkn(4, 1)).replica_id
         );
     }
 
@@ -1494,7 +1494,7 @@ mod test {
         assert!(!async_ds.replicas[&2]
             .thread_routing
             ._test_bit(ttkn_a.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_a).replica_id(), 0);
+        assert_eq!(async_ds.select_replica(ttkn_a).replica_id, 0);
 
         assert!(async_ds.replicas[&1]
             .thread_routing
@@ -1505,7 +1505,7 @@ mod test {
         assert!(!async_ds.replicas[&2]
             .thread_routing
             ._test_bit(ttkn_b.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_b).replica_id(), 1);
+        assert_eq!(async_ds.select_replica(ttkn_b).replica_id, 1);
 
         assert!(async_ds.replicas[&2]
             .thread_routing
@@ -1516,7 +1516,7 @@ mod test {
         assert!(!async_ds.replicas[&1]
             .thread_routing
             ._test_bit(ttkn_c.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_c).replica_id(), 2);
+        assert_eq!(async_ds.select_replica(ttkn_c).replica_id, 2);
 
         let ret = async_ds.remove_replica(0).unwrap();
         assert_eq!(ret, 0);
@@ -1529,14 +1529,14 @@ mod test {
                 && !async_ds.replicas[&2]
                     .thread_routing
                     ._test_bit(ttkn_a.gtid())
-                && async_ds.select_replica(ttkn_a).replica_id() == 1)
+                && async_ds.select_replica(ttkn_a).replica_id == 1)
                 || (!async_ds.replicas[&1]
                     .thread_routing
                     ._test_bit(ttkn_a.gtid())
                     && async_ds.replicas[&2]
                         .thread_routing
                         ._test_bit(ttkn_a.gtid())
-                    && async_ds.select_replica(ttkn_a).replica_id() == 2)
+                    && async_ds.select_replica(ttkn_a).replica_id == 2)
         );
 
         // other routing stays the same
@@ -1546,14 +1546,14 @@ mod test {
         assert!(!async_ds.replicas[&2]
             .thread_routing
             ._test_bit(ttkn_b.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_b).replica_id(), 1);
+        assert_eq!(async_ds.select_replica(ttkn_b).replica_id, 1);
         assert!(async_ds.replicas[&2]
             .thread_routing
             ._test_bit(ttkn_c.gtid()));
         assert!(!async_ds.replicas[&1]
             .thread_routing
             ._test_bit(ttkn_c.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_c).replica_id(), 2);
+        assert_eq!(async_ds.select_replica(ttkn_c).replica_id, 2);
 
         let ret = async_ds.remove_replica(2).unwrap();
         assert_eq!(ret, 2);
@@ -1562,15 +1562,15 @@ mod test {
         assert!(async_ds.replicas[&1]
             .thread_routing
             ._test_bit(ttkn_a.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_a).replica_id(), 1);
+        assert_eq!(async_ds.select_replica(ttkn_a).replica_id, 1);
         assert!(async_ds.replicas[&1]
             .thread_routing
             ._test_bit(ttkn_b.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_b).replica_id(), 1);
+        assert_eq!(async_ds.select_replica(ttkn_b).replica_id, 1);
         assert!(async_ds.replicas[&1]
             .thread_routing
             ._test_bit(ttkn_c.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_c).replica_id(), 1);
+        assert_eq!(async_ds.select_replica(ttkn_c).replica_id, 1);
 
         // re-add replicas
         let _ = async_ds.add_replica(0).unwrap();
@@ -1586,7 +1586,7 @@ mod test {
         assert!(!async_ds.replicas[&2]
             .thread_routing
             ._test_bit(ttkn_a.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_a).replica_id(), 0);
+        assert_eq!(async_ds.select_replica(ttkn_a).replica_id, 0);
 
         assert!(async_ds.replicas[&1]
             .thread_routing
@@ -1597,7 +1597,7 @@ mod test {
         assert!(!async_ds.replicas[&2]
             .thread_routing
             ._test_bit(ttkn_b.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_b).replica_id(), 1);
+        assert_eq!(async_ds.select_replica(ttkn_b).replica_id, 1);
 
         assert!(async_ds.replicas[&2]
             .thread_routing
@@ -1608,7 +1608,7 @@ mod test {
         assert!(!async_ds.replicas[&1]
             .thread_routing
             ._test_bit(ttkn_c.gtid()));
-        assert_eq!(async_ds.select_replica(ttkn_c).replica_id(), 2);
+        assert_eq!(async_ds.select_replica(ttkn_c).replica_id, 2);
     }
 
     // Tests whether we can issue a read-only operation against the replica.

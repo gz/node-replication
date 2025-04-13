@@ -128,6 +128,7 @@ where
     /// against the shared-log ([`Log::register()`]). Required to pass to the
     /// log when consuming operations from the log.
     log_tkn: LogToken,
+    pub replica_id: usize,
 
     /// Stores the index of the thread currently doing flat combining. Field is
     /// zero if there isn't any thread actively performing flat-combining.
@@ -270,8 +271,8 @@ where
     /// This should basically only ever be called in [`Replica::acquire_combiner_lock()`]
     /// if the compare exchange succeeds.
     unsafe fn new(replica: &'a Replica<D>, current_affinity: usize) -> Self {
-        let affinity_tkn = if current_affinity != replica.replica_id() {
-            Some(replica.affinity_mngr.switch(replica.replica_id()))
+        let affinity_tkn = if current_affinity != replica.replica_id {
+            Some(replica.affinity_mngr.switch(replica.replica_id))
         } else {
             None
         };
@@ -327,6 +328,7 @@ where
     ///   may give different results.
     pub fn with_data(log_tkn: LogToken, affinity_mngr: AffinityManager, d: D) -> Replica<D> {
         Replica {
+            replica_id: log_tkn.0 - 1,
             log_tkn,
             combiner: CachePadded::new(AtomicUsize::new(0)),
             next: CachePadded::new(AtomicUsize::new(0)),
@@ -428,7 +430,7 @@ where
             //logging::info!("register() {idx}");
             let rtkn = ReplicaToken(idx);
             // LogToken and ReplicaId are off by one
-            let ttkn = ThreadToken::new(self.replica_id(), rtkn);
+            let ttkn = ThreadToken::new(self.replica_id, rtkn);
 
             if self.thread_routing._test_bit(ttkn.gtid()) {
                 continue;
@@ -651,17 +653,6 @@ where
                 return Err((e, op));
             }
         }
-        // TODO(performance): If we're convinced this assert never fails
-        // (because we return errors in some cases now, all of the ones that
-        // make this assert fail?), we can get rid of the while below...
-        assert!(slog.is_replica_synced_for_reads(&self.log_tkn, ctail));
-        while !slog.is_replica_synced_for_reads(&self.log_tkn, ctail) {
-            if let Err(e) = self.try_combine(slog, contexts.clone(), self.replica_id()) {
-                return Err((e, op));
-            }
-            spin_loop();
-        }
-
         Ok(self.data.read(idx.gtid()).dispatch(op))
     }
 
@@ -756,12 +747,6 @@ where
         }
     }
 
-    /// Returns the replica id
-    #[inline(always)]
-    pub(crate) fn replica_id(&self) -> ReplicaId {
-        self.log_tkn.0 - 1
-    }
-
     /// Similar to [`Replica::sync`] but doesn't repeatedly try to acquire the
     /// combiner lock: if another thread already holds the lock and works
     /// towards advancing the replica it will just return.
@@ -794,6 +779,18 @@ where
                 #[cfg(loom)]
                 loom::thread::yield_now();
                 return None;
+            }
+        }
+
+        if current_affinity != self.replica_id {
+            // Be more patient if not local.
+            for _ in 0..4 {
+                if self.combiner.load(Ordering::Relaxed) != 0 {
+                    #[cfg(loom)]
+                    loom::thread::yield_now();
+                    return None;
+                }
+                spin_loop();
             }
         }
 

@@ -168,22 +168,27 @@ where
         // evaluates to true if each reader lock is free (i.e equal to zero).
         // We use the bitmap to determine which readers to check.
         loop {
-            if snapshot[0] > 0 {
-                let next_gtid = snapshot[0].trailing_zeros() as usize;
+            let mut snap0 = snapshot[0];
+            let mut snap1 = snapshot[1];
+
+            while snap0 > 0 {
+                let next_gtid = snap0.trailing_zeros() as usize;
                 if 0 == self.rlock[next_gtid].load(Ordering::Relaxed) {
                     snapshot[0] &= !(1 << next_gtid);
                 }
-                continue;
+                snap0 &= !(1 << next_gtid);
             }
-            if snapshot[1] > 0 {
-                let next_gtid = snapshot[1].trailing_zeros() as usize;
+            if snap1 > 0 {
+                let next_gtid = snap1.trailing_zeros() as usize;
                 if 0 == self.rlock[128 + next_gtid].load(Ordering::Relaxed) {
                     snapshot[1] &= !(1 << next_gtid);
                 }
-                continue;
+                snap1 &= !(1 << next_gtid);
             }
 
-            break;
+            if snapshot[0] == 0 && snapshot[1] == 0 {
+                break;
+            }
         }
         unsafe { WriteGuard::new(self) }
     }

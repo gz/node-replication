@@ -1005,4 +1005,67 @@ pub(crate) mod test {
             .store(MAX_THREADS_PER_REPLICA + 1, Ordering::SeqCst);
         assert!(repl.register().is_none());
     }
+
+    use lazy_static::lazy_static;
+    use std::sync::Mutex;
+    lazy_static! {
+        static ref MY_VAR: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::<usize>::new()));
+    }
+
+    // Tests whether registering more than the maximum limit of threads per replica is disallowed.
+    #[test]
+    fn test_combine_lock_affinity() {
+        use crate::nr::AffinityChange;
+
+        let slog = Log::<<Data as Dispatch>::WriteOperation>::new_with_bytes(1024, ());
+        let lt = slog.register().unwrap();
+
+        fn my_func(a: AffinityChange) -> usize {
+            match a {
+                AffinityChange::Replica(new) => {
+                    {
+                        let mut changes = MY_VAR.lock().unwrap();
+                        changes.push(new);
+                    }
+                    new + 1
+                }
+                AffinityChange::Revert(old) => {
+                    {
+                        let mut changes = MY_VAR.lock().unwrap();
+                        changes.push(old);
+                    }
+                    0
+                }
+            }
+        }
+
+        let repl = Replica::<Data>::new(lt, AffinityManager::new(Arc::new(my_func)));
+
+        // Check with no affinity change
+        let cl = unsafe { CombinerLock::new(&repl, 0) };
+        {
+            let changes = MY_VAR.lock().unwrap();
+            assert!(changes.len() == 0);
+        }
+        drop(cl);
+        {
+            let changes = MY_VAR.lock().unwrap();
+            assert!(changes.len() == 0);
+        }
+
+        // Check with affinity change
+        let cl = unsafe { CombinerLock::new(&repl, 1) };
+        {
+            let changes = MY_VAR.lock().unwrap();
+            assert!(changes.len() == 1);
+            assert!(changes[0] == 0);
+        }
+        drop(cl);
+        {
+            let changes = MY_VAR.lock().unwrap();
+            assert!(changes.len() == 2);
+            assert!(changes[0] == 0);
+            assert!(changes[1] == 1);
+        }
+    }
 }

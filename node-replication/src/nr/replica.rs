@@ -271,12 +271,14 @@ where
     /// This should basically only ever be called in [`Replica::acquire_combiner_lock()`]
     /// if the compare exchange succeeds.
     unsafe fn new(replica: &'a Replica<D>, current_affinity: usize) -> Self {
-        let affinity_tkn = if current_affinity != replica.replica_id {
+        let affinity_tkn = None;
+        /*if current_affinity != replica.replica_id {
             //Some(replica.affinity_mngr.switch(replica.replica_id))
             None
         } else {
             None
         };
+        */
         Self {
             replica,
             affinity_tkn,

@@ -838,7 +838,12 @@ where
         current_affinity: usize,
         maybe_token: &mut Option<AffinityToken>,
     ) {
+        /*
         if current_affinity != self.replica_id && maybe_token.is_none() {
+            *maybe_token = Some(self.affinity_mngr.switch(self.replica_id));
+        }
+        */
+        if maybe_token.is_none() {
             *maybe_token = Some(self.affinity_mngr.switch(self.replica_id));
         }
         let mut data = self.data.write(self.thread_routing.snapshot());
@@ -889,7 +894,12 @@ where
 
         // Append all collected operations into the shared log. We pass a closure
         // in here because operations on the log might need to be consumed for GC.
+        /*
         if current_affinity != self.replica_id && maybe_token.is_none() {
+            *maybe_token = Some(self.affinity_mngr.switch(self.replica_id));
+        }
+        */
+        if maybe_token.is_none() {
             *maybe_token = Some(self.affinity_mngr.switch(self.replica_id));
         }
         let res = {

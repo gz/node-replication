@@ -657,7 +657,7 @@ where
     /// ```
     pub fn register(&self, replica_id: ReplicaId) -> Option<ThreadToken> {
         if self.replicas.len() < MAX_REPLICAS_PER_LOG {
-            let ttkn = self.replicas[&replica_id].register()?;
+            let ttkn = self.replicas.get(&replica_id)?.register()?;
             logging::trace!("rid {replica_id} ttkn {ttkn:?} gtid = {}", ttkn.gtid);
             Some(ttkn)
         } else {

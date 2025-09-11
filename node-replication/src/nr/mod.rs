@@ -783,7 +783,7 @@ where
                         //return self.replicas[&tkn.rid]
                         //.get_response(&self.log, tkn.rtkn.tid())
                         //.expect("GcFailed has to produce a response");
-                        logging::info!("we're in gc failed");
+                        logging::debug!("we're in gc failed");
                         return self.get_response(tkn, replica);
                     }
                 },

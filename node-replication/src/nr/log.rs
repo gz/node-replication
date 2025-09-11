@@ -312,7 +312,7 @@ where
             // any new entries on the log to prevent deadlock.
             if min_local_tail == global_head {
                 if iteration % WARN_THRESHOLD == 0 {
-                    warn!("Spending a long time in `advance_head`, are we starving (min_replica_idx = {})?", min_replica_idx);
+                    debug!("Spending a long time in `advance_head`, are we starving (min_replica_idx = {})?", min_replica_idx);
                     return Err(min_replica_idx);
                 }
                 iteration += 1;
